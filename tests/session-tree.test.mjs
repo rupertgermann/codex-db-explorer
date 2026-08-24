@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { buildSessionForest, matchingSessionPaths } from "../lib/session-tree.ts";
+import { buildSessionForest, matchingSessionPaths, sessionArchiveNavigation } from "../lib/session-tree.ts";
 
 function session(id, parentThreadId = "", startedAt = 0) {
   return { id, path: `${id}.jsonl`, parentThreadId, startedAt };
@@ -93,4 +93,21 @@ test("builds a 4,000-session forest with 450 direct children promptly", () => {
   assert.equal(forest.length, 3_550);
   assert.equal(forest.find((node) => node.session.id === "large-parent")?.children.length, 450);
   assert.ok(elapsed < 1_000, `Expected the forest in under 1 second, received ${elapsed.toFixed(1)} ms`);
+});
+
+test("preserves selection and expansion while switching archive views", () => {
+  const initial = {
+    view: "list",
+    selectedPath: "child.jsonl",
+    expandedThreads: new Set(["root.jsonl"]),
+  };
+
+  const tree = sessionArchiveNavigation(initial, { type: "view", view: "tree" });
+  const collapsed = sessionArchiveNavigation(tree, { type: "toggle", key: "root.jsonl" });
+
+  assert.equal(tree.view, "tree");
+  assert.equal(tree.selectedPath, "child.jsonl");
+  assert.deepEqual([...tree.expandedThreads], ["root.jsonl"]);
+  assert.equal(collapsed.selectedPath, "child.jsonl");
+  assert.deepEqual([...collapsed.expandedThreads], []);
 });

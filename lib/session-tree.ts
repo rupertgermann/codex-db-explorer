@@ -25,6 +25,30 @@ export type SessionTreeNode<T extends ThreadSession> = {
   contextOnly: boolean;
 };
 
+export type SessionArchiveNavigation = {
+  view: "list" | "tree";
+  selectedPath: string;
+  expandedThreads: ReadonlySet<string>;
+};
+
+export type SessionArchiveNavigationAction =
+  | { type: "view"; view: SessionArchiveNavigation["view"] }
+  | { type: "select"; path: string }
+  | { type: "toggle"; key: string };
+
+export function sessionArchiveNavigation(
+  state: SessionArchiveNavigation,
+  action: SessionArchiveNavigationAction,
+): SessionArchiveNavigation {
+  if (action.type === "view") return { ...state, view: action.view };
+  if (action.type === "select") return { ...state, selectedPath: action.path };
+
+  const expandedThreads = new Set(state.expandedThreads);
+  if (expandedThreads.has(action.key)) expandedThreads.delete(action.key);
+  else expandedThreads.add(action.key);
+  return { ...state, expandedThreads };
+}
+
 function newestFirst<T extends ThreadSession>(left: T, right: T) {
   return right.startedAt - left.startedAt || left.id.localeCompare(right.id);
 }

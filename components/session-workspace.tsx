@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import {
   AlertTriangle,
   Bot,
@@ -33,7 +33,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { buildSessionForest, matchingSessionPaths, type SessionTreeNode } from "@/lib/session-tree";
+import { buildSessionForest, matchingSessionPaths, sessionArchiveNavigation, type SessionTreeNode } from "@/lib/session-tree";
+import type { SessionProvenance } from "@/lib/sessions";
 import { cn, formatBytes, formatDate, formatNumber } from "@/lib/utils";
 
 type SessionSummary = {
@@ -50,8 +51,6 @@ type SessionSummary = {
   provenance: SessionProvenance;
   parentThreadId: string;
 };
-
-type SessionProvenance = "user" | "codex" | "automation" | "unknown";
 
 type SessionCatalog = {
   root: string;
@@ -195,7 +194,7 @@ function ThreadTreeItem({
 }: {
   node: SessionTreeNode<SessionSummary>;
   depth?: number;
-  expanded: Set<string>;
+  expanded: ReadonlySet<string>;
   selectedPath?: string;
   onToggle: (path: string) => void;
   onSelect: (path: string) => void;
@@ -205,7 +204,7 @@ function ThreadTreeItem({
   const hasChildren = node.children.length > 0;
   return <div>
     <div className={cn("flex items-stretch rounded-lg transition hover:bg-muted", node.contextOnly && "opacity-55", selectedPath === node.session.path && "bg-violet-50 text-violet-950 opacity-100")} style={{ paddingLeft: `${Math.min(depth, 8) * 14 + 4}px` }}>
-      <button type="button" disabled={!hasChildren} onClick={() => onToggle(expansionKey)} aria-label={`${open ? "Collapse" : "Expand"} ${node.session.id}`} className="grid w-7 shrink-0 place-items-center text-muted-foreground disabled:opacity-20">
+      <button type="button" disabled={!hasChildren} onClick={() => onToggle(expansionKey)} aria-expanded={hasChildren ? open : undefined} aria-label={`${open ? "Collapse" : "Expand"} ${node.session.id}`} className="grid w-7 shrink-0 place-items-center text-muted-foreground disabled:opacity-20">
         {open ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
       </button>
       <button type="button" onClick={() => onSelect(node.session.path)} className="min-w-0 flex-1 px-1.5 py-2 text-left">
@@ -224,8 +223,12 @@ export function SessionWorkspace() {
   const [project, setProject] = useState("All");
   const [month, setMonth] = useState("All");
   const [provenance, setProvenance] = useState<"All" | SessionProvenance>("All");
-  const [archiveView, setArchiveView] = useState<"list" | "tree">("list");
-  const [expandedThreads, setExpandedThreads] = useState<Set<string>>(() => new Set());
+  const [archiveNavigation, dispatchArchiveNavigation] = useReducer(sessionArchiveNavigation, {
+    view: "list",
+    selectedPath: "",
+    expandedThreads: new Set<string>(),
+  });
+  const [treePagination, setTreePagination] = useState({ key: "", limit: 500 });
   const [query, setQuery] = useState("");
   const [searchResults, setSearchResults] = useState<SessionSummary[] | null>(null);
   const [loading, setLoading] = useState(true);
@@ -248,7 +251,9 @@ export function SessionWorkspace() {
     setSessionLoading(true); setMessage(null);
     setViewer("transcript"); setFullScanning(false); setFullProgress(0); setFullScanComplete(false); setRawPage(null); setRawLoading(false);
     try {
-      setSession(await sessionRequest<SessionDetail>(`/api/sessions/document?path=${encodeURIComponent(path)}`));
+      const detail = await sessionRequest<SessionDetail>(`/api/sessions/document?path=${encodeURIComponent(path)}`);
+      setSession(detail);
+      dispatchArchiveNavigation({ type: "select", path: detail.path });
     } catch (error) {
       setMessage({ kind: "error", text: error instanceof Error ? error.message : "Could not open session." });
     } finally { setSessionLoading(false); }
@@ -398,18 +403,18 @@ export function SessionWorkspace() {
   const hasActiveFilters = project !== "All" || month !== "All" || provenance !== "All" || searchResults !== null;
   const visibleSessions = useMemo(() => (catalog?.sessions ?? []).filter((item) => matchingPaths.has(item.path)), [catalog, matchingPaths]);
   const listedSessions = visibleSessions.slice(0, 1_000);
-  const sessionForest = useMemo(() => buildSessionForest(catalog?.sessions ?? [], hasActiveFilters ? matchingPaths : undefined), [catalog, hasActiveFilters, matchingPaths]);
+  const fullSessionForest = useMemo(() => buildSessionForest(catalog?.sessions ?? [], hasActiveFilters ? matchingPaths : undefined), [catalog, hasActiveFilters, matchingPaths]);
+  const treeFilterKey = `${project}\n${month}\n${provenance}\n${searchResults?.map((item) => item.path).join("\n") ?? ""}`;
+  const treeRootLimit = treePagination.key === treeFilterKey ? treePagination.limit : 500;
+  const sessionForest = fullSessionForest.slice(0, treeRootLimit);
   const maxProject = catalog?.topProjects[0]?.sessions ?? 1;
   const maxEvent = session?.eventTypes[0]?.count ?? 1;
   const canScanCompleteTranscript = Boolean(session && !fullScanComplete && (session.truncation.scanLimitReached || session.truncation.entryLimitReached));
 
-  function toggleThread(path: string) {
-    setExpandedThreads((current) => {
-      const next = new Set(current);
-      if (next.has(path)) next.delete(path); else next.add(path);
-      return next;
-    });
-  }
+  const archiveView = archiveNavigation.view;
+  const expandedThreads = archiveNavigation.expandedThreads;
+  const setArchiveView = (view: "list" | "tree") => dispatchArchiveNavigation({ type: "view", view });
+  const toggleThread = (key: string) => dispatchArchiveNavigation({ type: "toggle", key });
 
   if (loading && !catalog) return <div className="flex min-h-[65vh] items-center justify-center gap-2 text-sm text-muted-foreground"><Loader2 className="size-4 animate-spin" />Indexing session metadata…</div>;
   if (!catalog) return <div className="rounded-xl border border-red-200 bg-red-50 p-5 text-sm text-red-700">{message?.text ?? "Codex sessions are unavailable."}</div>;
@@ -433,7 +438,15 @@ export function SessionWorkspace() {
       <div className="grid gap-5 xl:grid-cols-[330px_minmax(0,1fr)] 2xl:grid-cols-[340px_minmax(0,1fr)_300px]">
         <Card className="min-w-0 overflow-hidden">
           <CardHeader className="border-b p-4"><div className="flex items-start justify-between gap-2"><div><CardTitle className="text-sm">Session archive</CardTitle><CardDescription>{searchResults ? `${visibleSessions.length} search results` : `${visibleSessions.length} indexed sessions`}</CardDescription></div><div className="flex rounded-lg border bg-muted/50 p-0.5"><button type="button" aria-pressed={archiveView === "list"} onClick={() => setArchiveView("list")} className={cn("flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-medium", archiveView === "list" && "bg-white shadow-sm")}><List className="size-3" />List</button><button type="button" aria-pressed={archiveView === "tree"} onClick={() => setArchiveView("tree")} className={cn("flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-medium", archiveView === "tree" && "bg-white shadow-sm")}><GitBranch className="size-3" />Tree</button></div></div><form onSubmit={search} className="flex gap-2 pt-2"><div className="relative min-w-0 flex-1"><Search className="absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" /><Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search session contents…" className="pl-9 pr-8" />{query && <button type="button" onClick={clearSearch} aria-label="Clear session search" className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground"><X className="size-3.5" /></button>}</div><Button type="submit" size="icon" variant="outline" disabled={searching} aria-label="Search sessions">{searching ? <Loader2 className="size-3.5 animate-spin" /> : <Search className="size-3.5" />}</Button></form><p className="text-[10px] leading-4 text-muted-foreground">Search runs only when submitted and may scan the complete archive for up to 20 seconds.</p><div className="grid gap-2 pt-1 sm:grid-cols-3 xl:grid-cols-1 2xl:grid-cols-3"><select value={project} onChange={(event) => setProject(event.target.value)} aria-label="Filter sessions by project" className="h-8 min-w-0 rounded-lg border bg-white px-2 text-xs"><option value="All">All projects</option>{projects.map((item) => <option key={item} value={item}>{item}</option>)}</select><select value={month} onChange={(event) => setMonth(event.target.value)} aria-label="Filter sessions by month" className="h-8 min-w-0 rounded-lg border bg-white px-2 text-xs"><option value="All">All months</option>{catalog.months.map((item) => <option key={item.month} value={item.month}>{monthLabel(item.month)}</option>)}</select><select value={provenance} onChange={(event) => setProvenance(event.target.value as "All" | SessionProvenance)} aria-label="Filter sessions by provenance" className="h-8 min-w-0 rounded-lg border bg-white px-2 text-xs"><option value="All">All origins</option>{Object.entries(provenanceLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></div></CardHeader>
-          <CardContent className="scrollbar-thin max-h-[760px] overflow-y-auto p-2">
+          <CardContent
+            className="scrollbar-thin max-h-[760px] overflow-y-auto p-2"
+            onScroll={(event) => {
+              const viewport = event.currentTarget;
+              if (archiveView === "tree" && viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight < 120 && sessionForest.length < fullSessionForest.length) {
+                setTreePagination({ key: treeFilterKey, limit: treeRootLimit + 500 });
+              }
+            }}
+          >
             {archiveView === "list" ? <>{listedSessions.length === 0 ? <p className="p-6 text-center text-xs text-muted-foreground">No sessions match the current filters.</p> : <div className="space-y-1">{listedSessions.map((item) => <button key={item.path} onClick={() => loadSession(item.path)} className={cn("w-full rounded-lg px-2.5 py-2.5 text-left transition hover:bg-muted", session?.path === item.path && "bg-violet-50 text-violet-950")}><span className="flex items-start gap-2.5"><span className={cn("mt-0.5 grid size-8 shrink-0 place-items-center rounded-lg", session?.path === item.path ? "bg-violet-100 text-violet-700" : "bg-muted text-muted-foreground")}><MessageSquareText className="size-3.5" /></span><span className="min-w-0 flex-1"><span className="flex items-center justify-between gap-1.5"><span className="min-w-0 truncate text-xs font-semibold">{item.project}</span><ProvenanceBadge provenance={item.provenance} /></span><span className="mt-0.5 block truncate font-mono text-[9px] text-muted-foreground">{item.id}</span><span className="mt-1 flex items-center justify-between gap-2 text-[9px] text-muted-foreground"><span>{formatDate(item.startedAt)}</span><span>{formatBytes(item.size)}</span></span></span></span></button>)}</div>}{visibleSessions.length > listedSessions.length && <p className="p-3 text-center text-[10px] text-muted-foreground">Showing the first {listedSessions.length} sessions. Narrow the filters to see more.</p>}</> : sessionForest.length === 0 ? <p className="p-6 text-center text-xs text-muted-foreground">No threads match the current filters.</p> : <div className="space-y-1">{sessionForest.map((node) => <ThreadTreeItem key={node.session.path} node={node} expanded={expandedThreads} selectedPath={session?.path} onToggle={toggleThread} onSelect={loadSession} />)}</div>}
           </CardContent>
         </Card>
@@ -460,8 +473,8 @@ export function SessionWorkspace() {
               </div>
               <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
                 <div className="flex rounded-lg border bg-muted/50 p-0.5">
-                  <button onClick={() => selectViewer("transcript")} className={cn("flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] font-medium", viewer === "transcript" && "bg-white shadow-sm")}><MessageSquareText className="size-3" />Transcript</button>
-                  <button onClick={() => selectViewer("raw")} className={cn("flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] font-medium", viewer === "raw" && "bg-white shadow-sm")}><Braces className="size-3" />Raw JSONL</button>
+                  <button aria-pressed={viewer === "transcript"} onClick={() => selectViewer("transcript")} className={cn("flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] font-medium", viewer === "transcript" && "bg-white shadow-sm")}><MessageSquareText className="size-3" />Transcript</button>
+                  <button aria-pressed={viewer === "raw"} onClick={() => selectViewer("raw")} className={cn("flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] font-medium", viewer === "raw" && "bg-white shadow-sm")}><Braces className="size-3" />Raw JSONL</button>
                 </div>
                 {viewer === "transcript" && canScanCompleteTranscript && !fullScanning && <Button size="sm" variant="outline" onClick={scanCompleteTranscript}><ScanText className="size-3.5" />Scan complete transcript</Button>}
                 {viewer === "transcript" && fullScanning && <Button size="sm" variant="outline" onClick={() => fullScanAbort.current?.abort()}><X className="size-3.5" />Cancel scan</Button>}
