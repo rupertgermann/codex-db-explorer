@@ -3,6 +3,8 @@ import { createReadStream, existsSync, lstatSync, openSync, closeSync, readSync,
 import { homedir } from "node:os";
 import { basename, extname, join, relative, resolve, sep } from "node:path";
 
+export type SessionProvenance = "user" | "codex" | "automation" | "unknown";
+
 export type SessionSummary = {
   id: string;
   path: string;
@@ -14,6 +16,8 @@ export type SessionSummary = {
   project: string;
   source: string;
   originator: string;
+  provenance: SessionProvenance;
+  parentThreadId: string;
 };
 
 export type SessionCatalog = {
@@ -146,12 +150,23 @@ function projectName(cwd: string) {
   return cwd ? basename(cwd) || cwd : "Unknown";
 }
 
+function sessionProvenance(payload: Record<string, unknown>): SessionProvenance {
+  const threadSource = string(payload.thread_source);
+  if (threadSource === "user") return "user";
+  if (threadSource === "subagent") return "codex";
+  if (threadSource.includes("automation")) return "automation";
+  const source = object(payload.source);
+  if (string(payload.parent_thread_id) || Object.keys(object(source.subagent)).length > 0) return "codex";
+  return "unknown";
+}
+
 function summary(root: string, path: string): SessionSummary {
   const absolutePath = join(root, path);
   const file = statSync(absolutePath);
   const record = firstRecord(absolutePath);
   const payload = object(record?.payload);
   const cwd = string(payload.cwd);
+  const parentThreadId = string(payload.parent_thread_id);
   return {
     id: string(payload.id) || basename(path, ".jsonl"),
     path,
@@ -163,6 +178,8 @@ function summary(root: string, path: string): SessionSummary {
     project: projectName(cwd),
     source: string(payload.source) || "unknown",
     originator: string(payload.originator) || "unknown",
+    provenance: sessionProvenance(payload),
+    parentThreadId,
   };
 }
 

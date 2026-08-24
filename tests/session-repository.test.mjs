@@ -44,6 +44,36 @@ test("catalogs JSONL sessions from metadata without treating other files as sess
   assert.deepEqual(catalog.months, [{ month: "2026-08", sessions: 2, bytes: catalog.totals.bytes }]);
 });
 
+test("classifies user, Codex, automation, and legacy session provenance", () => {
+  const root = sessionRoot();
+  writeSession(root, "2026/08/user.jsonl", [
+    { type: "session_meta", payload: { id: "user", thread_source: "user", source: "vscode" } },
+  ]);
+  writeSession(root, "2026/08/codex.jsonl", [
+    { type: "session_meta", payload: { id: "codex", thread_source: "subagent", parent_thread_id: "user", source: { subagent: { thread_spawn: {} } } } },
+  ]);
+  writeSession(root, "2026/08/automation.jsonl", [
+    { type: "session_meta", payload: { id: "automation", thread_source: "pull_request_fix_automation", source: "vscode" } },
+  ]);
+  writeSession(root, "2026/08/legacy-codex.jsonl", [
+    { type: "session_meta", payload: { id: "legacy-codex", parent_thread_id: "user", source: { subagent: { thread_spawn: {} } } } },
+  ]);
+  writeSession(root, "2026/08/unknown.jsonl", [
+    { type: "session_meta", payload: { id: "unknown", source: "vscode" } },
+  ]);
+
+  const sessions = new SessionRepository(root).catalog().sessions;
+  const provenance = Object.fromEntries(sessions.map((session) => [session.id, [session.provenance, session.parentThreadId]]));
+
+  assert.deepEqual(provenance, {
+    user: ["user", ""],
+    codex: ["codex", "user"],
+    automation: ["automation", ""],
+    "legacy-codex": ["codex", "user"],
+    unknown: ["unknown", ""],
+  });
+});
+
 test("reads the human conversation and tool activity from a session", async () => {
   const root = sessionRoot();
   writeSession(root, "2026/08/24/session.jsonl", [

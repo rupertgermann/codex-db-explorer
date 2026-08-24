@@ -18,6 +18,7 @@ A local Next.js interface for exploring Codex SQLite databases, the complete Mar
 - Edits Markdown with a GFM preview, stale-revision detection, and atomic replacement
 - Indexes every JSONL file under `~/.codex/sessions` without scanning the full archive on page load
 - Browses human messages and tool calls with per-session event analysis
+- Distinguishes user, Codex-subtask, automation, and legacy sessions and browses their parent-child relationships as an expandable thread forest
 - Streams complete transcripts on demand and exposes every file through a bounded, byte-paginated Raw JSONL viewer
 - Searches session contents explicitly with a bounded full-text scan
 
