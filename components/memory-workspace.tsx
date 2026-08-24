@@ -1,0 +1,271 @@
+"use client";
+
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import {
+  AlertTriangle,
+  BookOpen,
+  Brain,
+  CheckCircle2,
+  Eye,
+  FileText,
+  Folder,
+  Hash,
+  Loader2,
+  Pencil,
+  RefreshCw,
+  Save,
+  Search,
+  Text,
+  Trash2,
+  X,
+} from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { cn, formatBytes, formatDate, formatNumber } from "@/lib/utils";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+
+type MemoryFile = {
+  path: string;
+  name: string;
+  directory: string;
+  title: string;
+  size: number;
+  modifiedAt: number;
+  words: number;
+  headings: number;
+  hash: string;
+};
+
+type MemoryDocument = MemoryFile & { content: string };
+type MemoryCatalog = {
+  root: string;
+  files: MemoryFile[];
+  directories: string[];
+  totals: { files: number; bytes: number; words: number; headings: number };
+  topTerms: { term: string; count: number }[];
+};
+type SearchResult = {
+  path: string;
+  title: string;
+  matches: { line: number; excerpt: string }[];
+  matchCount: number;
+};
+
+async function memoryRequest<T>(url: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(url, { cache: "no-store", ...init });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error ?? "Memory request failed.");
+  return data as T;
+}
+
+async function memorySnapshot(includeInitialDocument: boolean) {
+  const catalog = await memoryRequest<MemoryCatalog>("/api/memory");
+  if (!includeInitialDocument) return { catalog, document: null };
+  const initial = catalog.files.find((file) => file.path === "MEMORY.md") ?? catalog.files[0];
+  const document = initial
+    ? await memoryRequest<MemoryDocument>(`/api/memory/document?path=${encodeURIComponent(initial.path)}`)
+    : null;
+  return { catalog, document };
+}
+
+function Metric({ label, value, detail, icon: Icon }: { label: string; value: string; detail: string; icon: typeof Brain }) {
+  return (
+    <Card>
+      <CardContent className="flex items-start justify-between p-4">
+        <div><p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-muted-foreground">{label}</p><p className="mt-1.5 text-xl font-semibold tracking-[-0.03em]">{value}</p><p className="mt-1 text-[11px] text-muted-foreground">{detail}</p></div>
+        <span className="rounded-lg bg-cyan-50 p-2 text-cyan-700"><Icon className="size-4" /></span>
+      </CardContent>
+    </Card>
+  );
+}
+
+function MarkdownPreview({ content }: { content: string }) {
+  return (
+    <article className="memory-markdown mx-auto max-w-3xl p-6 text-sm leading-7 text-slate-700 sm:p-8">
+      <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+    </article>
+  );
+}
+
+export function MemoryWorkspace() {
+  const [catalog, setCatalog] = useState<MemoryCatalog | null>(null);
+  const [document, setDocument] = useState<MemoryDocument | null>(null);
+  const [editedContent, setEditedContent] = useState("");
+  const [directory, setDirectory] = useState("All");
+  const [query, setQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<SearchResult[] | null>(null);
+  const [view, setView] = useState<"edit" | "preview">("edit");
+  const [loading, setLoading] = useState(true);
+  const [documentLoading, setDocumentLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [message, setMessage] = useState<{ kind: "success" | "error"; text: string } | null>(null);
+
+  const dirty = document !== null && editedContent !== document.content;
+
+  const loadDocument = useCallback(async (path: string, force = false) => {
+    if (!force && dirty && !window.confirm("Discard the unsaved changes in this memory file?")) return;
+    setDocumentLoading(true); setMessage(null);
+    try {
+      const next = await memoryRequest<MemoryDocument>(`/api/memory/document?path=${encodeURIComponent(path)}`);
+      setDocument(next); setEditedContent(next.content); setView("edit");
+    } catch (error) {
+      setMessage({ kind: "error", text: error instanceof Error ? error.message : "Could not open memory file." });
+    } finally { setDocumentLoading(false); }
+  }, [dirty]);
+
+  const loadCatalog = useCallback(async () => {
+    setLoading(true); setMessage(null);
+    try {
+      const next = await memorySnapshot(!document);
+      setCatalog(next.catalog);
+      if (next.document) {
+        setDocument(next.document);
+        setEditedContent(next.document.content);
+      }
+    } catch (error) {
+      setMessage({ kind: "error", text: error instanceof Error ? error.message : "Could not load Codex memory." });
+    } finally { setLoading(false); }
+  }, [document]);
+
+  useEffect(() => {
+    memorySnapshot(true)
+      .then((next) => {
+        setCatalog(next.catalog);
+        if (next.document) {
+          setDocument(next.document);
+          setEditedContent(next.document.content);
+        }
+      })
+      .catch((error) => setMessage({ kind: "error", text: error instanceof Error ? error.message : "Could not load Codex memory." }))
+      .finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => {
+    const warn = (event: BeforeUnloadEvent) => { if (dirty) event.preventDefault(); };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [dirty]);
+
+  useEffect(() => {
+    const needle = query.trim();
+    if (!needle) {
+      const timer = setTimeout(() => setSearchResults(null), 0);
+      return () => clearTimeout(timer);
+    }
+    const timer = setTimeout(() => {
+      memoryRequest<{ results: SearchResult[] }>(`/api/memory/search?q=${encodeURIComponent(needle)}`)
+        .then((data) => setSearchResults(data.results))
+        .catch((error) => setMessage({ kind: "error", text: error instanceof Error ? error.message : "Search failed." }));
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [query]);
+
+  async function save() {
+    if (!document || !dirty) return;
+    setSaving(true); setMessage(null);
+    try {
+      const saved = await memoryRequest<MemoryDocument>("/api/memory/document", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: document.path, content: editedContent, expectedHash: document.hash }),
+      });
+      setDocument(saved); setEditedContent(saved.content);
+      setMessage({ kind: "success", text: `Saved ${saved.path}` });
+      const next = await memoryRequest<MemoryCatalog>("/api/memory");
+      setCatalog(next);
+    } catch (error) {
+      setMessage({ kind: "error", text: error instanceof Error ? error.message : "Could not save memory file." });
+    } finally { setSaving(false); }
+  }
+
+  async function deleteDocument() {
+    if (!document) return;
+    setDeleting(true); setMessage(null);
+    const deletedPath = document.path;
+    try {
+      await memoryRequest<{ path: string }>("/api/memory/document", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: deletedPath, expectedHash: document.hash }),
+      });
+      const nextCatalog = await memoryRequest<MemoryCatalog>("/api/memory");
+      const nextSummary = nextCatalog.files.find((file) => file.path === "MEMORY.md") ?? nextCatalog.files[0];
+      const nextDocument = nextSummary
+        ? await memoryRequest<MemoryDocument>(`/api/memory/document?path=${encodeURIComponent(nextSummary.path)}`)
+        : null;
+      setCatalog(nextCatalog);
+      setSearchResults((results) => results?.filter((result) => result.path !== deletedPath) ?? null);
+      if (directory !== "All" && !nextCatalog.directories.includes(directory)) setDirectory("All");
+      setDocument(nextDocument);
+      setEditedContent(nextDocument?.content ?? "");
+      setDeleteOpen(false);
+      setMessage({ kind: "success", text: `Deleted ${deletedPath}` });
+    } catch (error) {
+      setMessage({ kind: "error", text: error instanceof Error ? error.message : "Could not delete memory file." });
+    } finally { setDeleting(false); }
+  }
+
+  const visibleFiles = useMemo(() => catalog?.files.filter((file) => directory === "All" || file.directory === directory) ?? [], [catalog, directory]);
+  const directoryCounts = useMemo(() => catalog?.files.reduce<Record<string, number>>((counts, file) => ({ ...counts, [file.directory]: (counts[file.directory] ?? 0) + 1 }), {}) ?? {}, [catalog]);
+  const maxTerm = catalog?.topTerms[0]?.count ?? 1;
+
+  if (loading && !catalog) return <div className="flex min-h-[65vh] items-center justify-center gap-2 text-sm text-muted-foreground"><Loader2 className="size-4 animate-spin" />Analyzing Markdown memory…</div>;
+  if (!catalog) return <div className="rounded-xl border border-red-200 bg-red-50 p-5 text-sm text-red-700">{message?.text ?? "Codex memory is unavailable."}</div>;
+
+  return (
+    <div className="space-y-5">
+      <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
+        <div><div className="mb-2 flex items-center gap-2"><Badge className="border-cyan-200 bg-cyan-50 text-cyan-700"><Brain className="size-3" />Markdown corpus</Badge><span className="text-xs text-muted-foreground">{catalog.root}</span></div><h1 className="text-2xl font-semibold tracking-[-0.035em] sm:text-3xl">Codex Memory</h1><p className="mt-1 max-w-2xl text-sm text-muted-foreground">Search and analyze the complete Markdown corpus, then edit files with revision-checked atomic saves.</p></div>
+        <Button variant="outline" size="sm" onClick={loadCatalog} disabled={loading}><RefreshCw className={cn("size-3.5", loading && "animate-spin")} />Refresh analysis</Button>
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <Metric label="Files" value={formatNumber(catalog.totals.files)} detail={`${catalog.directories.length} directories`} icon={FileText} />
+        <Metric label="Corpus size" value={formatBytes(catalog.totals.bytes)} detail="All Markdown files" icon={BookOpen} />
+        <Metric label="Words" value={formatNumber(catalog.totals.words)} detail="Searchable tokens" icon={Text} />
+        <Metric label="Headings" value={formatNumber(catalog.totals.headings)} detail="Document structure" icon={Hash} />
+      </div>
+
+      {message && <div className={cn("flex items-center justify-between rounded-lg border px-4 py-3 text-sm", message.kind === "success" ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-red-200 bg-red-50 text-red-700")}><span className="flex items-center gap-2">{message.kind === "success" ? <CheckCircle2 className="size-4" /> : <AlertTriangle className="size-4" />}{message.text}</span><button onClick={() => setMessage(null)} aria-label="Dismiss message"><X className="size-4" /></button></div>}
+
+      <div className="grid gap-5 xl:grid-cols-[280px_minmax(0,1fr)] 2xl:grid-cols-[300px_minmax(0,1fr)_280px]">
+        <Card className="min-w-0 overflow-hidden">
+          <CardHeader className="border-b p-4"><CardTitle className="text-sm">Memory files</CardTitle><CardDescription>Every Markdown file under the memory root</CardDescription><div className="relative pt-2"><Search className="absolute left-3 top-[26px] size-3.5 -translate-y-1/2 text-muted-foreground" /><Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search all contents…" className="pl-9 pr-8" />{query && <button onClick={() => setQuery("")} className="absolute right-3 top-[26px] -translate-y-1/2 text-muted-foreground"><X className="size-3.5" /></button>}</div>{!query && <select value={directory} onChange={(event) => setDirectory(event.target.value)} className="mt-2 h-8 w-full rounded-lg border bg-white px-2 text-xs"><option value="All">All directories ({catalog.files.length})</option>{catalog.directories.map((item) => <option key={item} value={item}>{item} ({directoryCounts[item]})</option>)}</select>}</CardHeader>
+          <CardContent className="scrollbar-thin max-h-[680px] overflow-y-auto p-2">
+            {searchResults !== null ? searchResults.length === 0 ? <p className="p-5 text-center text-xs text-muted-foreground">No matches for “{query}”.</p> : <div className="space-y-1">{searchResults.map((result) => <button key={result.path} onClick={() => loadDocument(result.path)} className={cn("w-full rounded-lg border p-3 text-left transition hover:border-indigo-200 hover:bg-indigo-50/40", document?.path === result.path && "border-indigo-300 bg-indigo-50")}><span className="flex items-start justify-between gap-2"><span className="min-w-0"><span className="block truncate text-xs font-semibold">{result.title}</span><span className="block truncate font-mono text-[9px] text-muted-foreground">{result.path}</span></span><Badge variant="secondary">{result.matchCount}</Badge></span>{result.matches.slice(0, 2).map((match, index) => <span key={`${match.line}-${index}`} className="mt-2 block border-l-2 border-indigo-200 pl-2 text-[10px] leading-4 text-muted-foreground"><b className="mr-1 text-indigo-500">L{match.line}</b>{match.excerpt}</span>)}</button>)}</div> : <div className="space-y-1">{visibleFiles.map((file) => <button key={file.path} onClick={() => loadDocument(file.path)} className={cn("flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition hover:bg-muted", document?.path === file.path && "bg-indigo-50 text-indigo-900")}><span className={cn("grid size-8 shrink-0 place-items-center rounded-lg", document?.path === file.path ? "bg-indigo-100 text-indigo-700" : "bg-muted text-muted-foreground")}><FileText className="size-3.5" /></span><span className="min-w-0 flex-1"><span className="block truncate text-xs font-medium">{file.title}</span><span className="block truncate font-mono text-[9px] text-muted-foreground">{file.path}</span></span><span className="text-[9px] tabular-nums text-muted-foreground">{formatBytes(file.size)}</span></button>)}</div>}
+          </CardContent>
+        </Card>
+
+        <Card className="min-w-0 overflow-hidden">
+          {document ? <Fragment><div className="flex flex-col gap-3 border-b px-4 py-3 sm:flex-row sm:items-center sm:justify-between"><div className="min-w-0"><div className="flex items-center gap-2"><p className="truncate text-sm font-semibold">{document.title}</p>{dirty && <Badge variant="warning">unsaved</Badge>}</div><p className="truncate font-mono text-[10px] text-muted-foreground">{document.path}</p></div><div className="flex items-center gap-2"><div className="flex rounded-lg border bg-muted/40 p-0.5"><button onClick={() => setView("edit")} className={cn("flex h-7 items-center gap-1 rounded-md px-2 text-[11px]", view === "edit" ? "bg-white font-medium shadow-sm" : "text-muted-foreground")}><Pencil className="size-3" />Edit</button><button onClick={() => setView("preview")} className={cn("flex h-7 items-center gap-1 rounded-md px-2 text-[11px]", view === "preview" ? "bg-white font-medium shadow-sm" : "text-muted-foreground")}><Eye className="size-3" />Preview</button></div><Button variant="outline" size="sm" onClick={() => setDeleteOpen(true)} disabled={deleting || documentLoading} className="border-red-200 text-red-700 hover:bg-red-50 hover:text-red-800"><Trash2 className="size-3.5" /><span className="hidden sm:inline">Delete</span></Button><Button size="sm" onClick={save} disabled={!dirty || saving}>{saving ? <Loader2 className="size-3.5 animate-spin" /> : <Save className="size-3.5" />}Save</Button></div></div>{documentLoading ? <div className="flex min-h-[600px] items-center justify-center gap-2 text-sm text-muted-foreground"><Loader2 className="size-4 animate-spin" />Opening file…</div> : view === "edit" ? <textarea value={editedContent} onChange={(event) => setEditedContent(event.target.value)} spellCheck={false} className="scrollbar-thin min-h-[680px] w-full resize-y bg-[#151c27] p-5 font-mono text-[12px] leading-6 text-slate-200 outline-none" /> : <div className="scrollbar-thin min-h-[680px] max-h-[760px] overflow-y-auto bg-white"><MarkdownPreview content={editedContent} /></div>}<div className="flex flex-wrap items-center justify-between gap-2 border-t px-4 py-2 text-[10px] text-muted-foreground"><span>{formatNumber(editedContent.length)} characters · {formatNumber(editedContent.match(/[\p{L}\p{N}][\p{L}\p{N}_'-]*/gu)?.length ?? 0)} words</span><span>Loaded {formatDate(document.modifiedAt)} · rev {document.hash.slice(0, 8)}</span></div></Fragment> : <div className="flex min-h-[680px] items-center justify-center text-sm text-muted-foreground">Select a memory file.</div>}
+        </Card>
+
+        <div className="space-y-5 xl:col-span-2 xl:grid xl:grid-cols-2 xl:gap-5 xl:space-y-0 2xl:col-span-1 2xl:block 2xl:space-y-5">
+          <Card><CardHeader><CardTitle className="flex items-center gap-2 text-sm"><Brain className="size-4 text-cyan-600" />Frequent terms</CardTitle><CardDescription>Most frequent non-stopwords across the corpus</CardDescription></CardHeader><CardContent className="space-y-2.5">{catalog.topTerms.slice(0, 12).map((item) => <div key={item.term}><div className="mb-1 flex items-center justify-between text-[11px]"><span className="truncate">{item.term}</span><span className="tabular-nums text-muted-foreground">{formatNumber(item.count)}</span></div><div className="h-1 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-cyan-500" style={{ width: `${Math.max(4, item.count / maxTerm * 100)}%` }} /></div></div>)}</CardContent></Card>
+          <Card><CardHeader><CardTitle className="flex items-center gap-2 text-sm"><Folder className="size-4 text-indigo-500" />Corpus map</CardTitle><CardDescription>Markdown files by directory</CardDescription></CardHeader><CardContent className="space-y-2">{Object.entries(directoryCounts).sort(([, left], [, right]) => right - left).map(([name, count]) => <button key={name} onClick={() => { setQuery(""); setDirectory(name); }} className="flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-xs hover:bg-muted"><span className="truncate font-mono text-[10px]">{name}</span><Badge variant="secondary">{count}</Badge></button>)}</CardContent></Card>
+        </div>
+      </div>
+
+      <Dialog open={deleteOpen} onOpenChange={(open) => { if (!deleting) setDeleteOpen(open); }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Delete Markdown file?</DialogTitle>
+            <DialogDescription>This permanently deletes the selected file from Codex memory. This action cannot be undone.</DialogDescription>
+          </DialogHeader>
+          <div className="rounded-lg border border-red-100 bg-red-50 p-3 font-mono text-xs text-red-800">{document?.path}</div>
+          {dirty && <p className="mt-3 flex items-start gap-2 text-xs text-amber-700"><AlertTriangle className="mt-0.5 size-3.5 shrink-0" />Unsaved editor changes will also be discarded.</p>}
+          <div className="mt-6 flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setDeleteOpen(false)} disabled={deleting}>Cancel</Button>
+            <Button variant="destructive" onClick={deleteDocument} disabled={deleting}>{deleting ? <Loader2 className="size-4 animate-spin" /> : <Trash2 className="size-4" />}Delete file</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}

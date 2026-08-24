@@ -1,6 +1,8 @@
-# Codex Atlas
+# Codex DB Explorer
 
-A local, read-only Next.js interface for exploring and analyzing Codex SQLite databases.
+A local Next.js interface for exploring Codex SQLite databases and the complete Markdown memory corpus.
+
+> **Runs on your machine, against your data.** No telemetry, no external services, no data leaves your device.
 
 ## What it does
 
@@ -10,8 +12,18 @@ A local, read-only Next.js interface for exploring and analyzing Codex SQLite da
 - Browses tables with pagination, search, sorting, and expanded row details
 - Runs guarded `SELECT`, `WITH`, and `EXPLAIN QUERY PLAN` statements
 - Exports query results to CSV
+- Discovers every Markdown file under `~/.codex/memories`
+- Analyzes corpus size, structure, directories, and frequent terms
+- Searches all memory content with file and line-level matches
+- Edits Markdown with a GFM preview, stale-revision detection, and atomic replacement
 
-The server opens every database with SQLite's read-only flag. The query endpoint also rejects write and schema-changing statements.
+## Privacy & security
+
+- Databases are opened with SQLite's read-only flag; the query endpoint rejects write and schema-changing statements.
+- Memory files change only when you explicitly press **Save**. Immediately before an atomic replacement, a revision hash rejects a stale editor copy.
+- The app reads whatever is in `~/.codex` — that can include prompts, conversations, and memories. Treat any screenshot, CSV export, or shared query result as potentially sensitive.
+- Intended for `localhost` only. The API routes have **no authentication**, so anyone who can reach the port can read databases and edit memory Markdown. Do not deploy this or bind it to a public interface.
+- CSV exports are written wherever your browser downloads go and are gitignored inside this repo by default.
 
 ## Run locally
 
@@ -22,7 +34,13 @@ npm run dev
 
 Then open [http://localhost:3000](http://localhost:3000).
 
-To include another directory of SQLite files:
+## Configuration
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `CODEX_HOME` | `~/.codex` | Root directory scanned for SQLite stores |
+| `CODEX_DB_DIRECTORY` | – | Additional directory of SQLite files to include |
+| `CODEX_MEMORY_DIRECTORY` | `$CODEX_HOME/memories` | Markdown memory root |
 
 ```bash
 CODEX_DB_DIRECTORY=/absolute/path/to/databases npm run dev
@@ -37,3 +55,7 @@ npm run build
 ```
 
 Node 24 or newer is recommended because the app uses the built-in `node:sqlite` module and does not need a native SQLite package.
+
+## License
+
+[MIT](LICENSE)

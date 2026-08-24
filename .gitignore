@@ -4,4 +4,14 @@
 *.log
 *.tsbuildinfo
 .DS_Store
-.env*.local
+.env
+.env.*
+!.env.example
+
+# never commit local databases or exported data
+*.sqlite
+*.sqlite3
+*.db
+*.db-wal
+*.db-shm
+*.csv
