@@ -22,6 +22,7 @@ import {
   Layers3,
   Loader2,
   Menu,
+  MessageSquareText,
   Pencil,
   Play,
   RefreshCw,
@@ -48,6 +49,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { MemoryWorkspace } from "@/components/memory-workspace";
+import { SessionWorkspace } from "@/components/session-workspace";
 import { cn, formatBytes, formatDate, formatNumber } from "@/lib/utils";
 
 type JsonValue = string | number | boolean | null;
@@ -59,7 +61,7 @@ type ChartPoint = { name: string; value: number };
 type Analysis = { metrics: { size: number; tables: number; rows: number; modifiedAt: number }; activity: ChartPoint[]; breakdown: ChartPoint[]; insight: string };
 type Row = Record<string, JsonValue>;
 type Tab = "overview" | "browser" | "query" | "schema";
-type Workspace = "databases" | "memory";
+type Workspace = "databases" | "memory" | "sessions";
 
 const PIE_COLORS = ["#6264ef", "#7e80f5", "#9ca0fb", "#b9bcff", "#4fc3a1", "#f4b860", "#ed7b84", "#8ba4bd"];
 
@@ -128,6 +130,7 @@ function Sidebar({ databases, selectedId, onSelect, filter, setFilter, workspace
       <div className="space-y-1 border-b border-white/10 p-3">
         <button onClick={() => onWorkspaceChange("databases")} className={cn("flex w-full items-center gap-3 rounded-lg px-3 py-2 text-xs font-medium transition", workspace === "databases" ? "bg-white/10 text-white" : "text-slate-400 hover:bg-white/[0.06] hover:text-slate-200")}><Database className="size-4" />SQLite databases</button>
         <button onClick={() => onWorkspaceChange("memory")} className={cn("flex w-full items-center gap-3 rounded-lg px-3 py-2 text-xs font-medium transition", workspace === "memory" ? "bg-cyan-400/10 text-cyan-200" : "text-slate-400 hover:bg-white/[0.06] hover:text-slate-200")}><Brain className="size-4" />Markdown memory</button>
+        <button onClick={() => onWorkspaceChange("sessions")} className={cn("flex w-full items-center gap-3 rounded-lg px-3 py-2 text-xs font-medium transition", workspace === "sessions" ? "bg-violet-400/10 text-violet-200" : "text-slate-400 hover:bg-white/[0.06] hover:text-slate-200")}><MessageSquareText className="size-4" />Session archive</button>
       </div>
       {workspace === "databases" && <div className="px-4 py-4">
         <div className="relative">
@@ -150,9 +153,9 @@ function Sidebar({ databases, selectedId, onSelect, filter, setFilter, workspace
             </div>
           </div>
         ))}
-      </div> : <div className="flex-1 px-4 py-5"><div className="rounded-xl border border-cyan-300/10 bg-cyan-300/[0.05] p-4"><Brain className="mb-3 size-5 text-cyan-300" /><p className="text-xs font-medium text-cyan-100">Complete memory corpus</p><p className="mt-1 text-[11px] leading-5 text-slate-400">Analyze, search, preview, and safely edit every Markdown file under the Codex memory root.</p></div></div>}
+      </div> : <div className="flex-1 px-4 py-5">{workspace === "memory" ? <div className="rounded-xl border border-cyan-300/10 bg-cyan-300/[0.05] p-4"><Brain className="mb-3 size-5 text-cyan-300" /><p className="text-xs font-medium text-cyan-100">Complete memory corpus</p><p className="mt-1 text-[11px] leading-5 text-slate-400">Analyze, search, preview, and safely edit every Markdown file under the Codex memory root.</p></div> : <div className="rounded-xl border border-violet-300/10 bg-violet-300/[0.05] p-4"><MessageSquareText className="mb-3 size-5 text-violet-300" /><p className="text-xs font-medium text-violet-100">Complete session archive</p><p className="mt-1 text-[11px] leading-5 text-slate-400">Browse JSONL conversations, search the archive, and analyze project and tool activity.</p></div>}</div>}
       <div className="border-t border-white/10 p-4">
-        <div className={cn("flex items-center gap-2 rounded-lg px-3 py-2 text-[11px]", workspace === "databases" ? "bg-emerald-400/[0.08] text-emerald-300" : "bg-amber-400/[0.08] text-amber-200")}><ShieldCheck className="size-3.5" />{workspace === "databases" ? "Read-only connection" : "Revision-checked file editing"}</div>
+        <div className={cn("flex items-center gap-2 rounded-lg px-3 py-2 text-[11px]", workspace === "databases" ? "bg-emerald-400/[0.08] text-emerald-300" : workspace === "memory" ? "bg-amber-400/[0.08] text-amber-200" : "bg-violet-400/[0.08] text-violet-200")}><ShieldCheck className="size-3.5" />{workspace === "databases" ? "Read-only connection" : workspace === "memory" ? "Revision-checked file editing" : "Read-only session archive"}</div>
       </div>
     </aside>
   );
@@ -411,12 +414,12 @@ export function CodexExplorer() {
       <Sidebar databases={databases} selectedId={selectedId} onSelect={(id) => { setSelectedId(id); setTab("overview"); }} filter={filter} setFilter={setFilter} workspace={workspace} onWorkspaceChange={(next) => { setWorkspace(next); setMobileMenu(false); }} />
       <main className="min-h-screen lg:ml-[272px]">
         <header className="sticky top-0 z-20 flex h-16 items-center justify-between border-b bg-white/90 px-4 backdrop-blur-xl sm:px-6 lg:px-8">
-          <div className="flex min-w-0 items-center gap-3"><Button variant="ghost" size="icon" className="lg:hidden" aria-label="Choose workspace" onClick={() => setMobileMenu((value) => !value)}><Menu className="size-5" /></Button><div className="min-w-0"><p className="truncate text-sm font-semibold">{workspace === "memory" ? "Markdown memory" : database?.filename ?? "Codex databases"}</p><p className="truncate text-[11px] text-muted-foreground">{workspace === "memory" ? "Complete local corpus" : database ? database.relativePath : "Scanning local stores…"}</p></div></div>
-          <div className="flex items-center gap-2">{workspace === "databases" ? <><Badge variant="success" className="hidden sm:inline-flex"><span className="size-1.5 rounded-full bg-emerald-500" />Read only</Badge><Button variant="outline" size="sm" onClick={loadCatalog} disabled={loading} aria-label="Refresh database catalog"><RefreshCw className={cn("size-3.5", loading && "animate-spin")} /><span className="hidden sm:inline">Refresh</span></Button></> : <Badge variant="warning"><Pencil className="size-3" />Editable Markdown</Badge>}</div>
+          <div className="flex min-w-0 items-center gap-3"><Button variant="ghost" size="icon" className="lg:hidden" aria-label="Choose workspace" onClick={() => setMobileMenu((value) => !value)}><Menu className="size-5" /></Button><div className="min-w-0"><p className="truncate text-sm font-semibold">{workspace === "memory" ? "Markdown memory" : workspace === "sessions" ? "Session archive" : database?.filename ?? "Codex databases"}</p><p className="truncate text-[11px] text-muted-foreground">{workspace === "memory" ? "Complete local corpus" : workspace === "sessions" ? "Complete JSONL history" : database ? database.relativePath : "Scanning local stores…"}</p></div></div>
+          <div className="flex items-center gap-2">{workspace === "databases" ? <><Badge variant="success" className="hidden sm:inline-flex"><span className="size-1.5 rounded-full bg-emerald-500" />Read only</Badge><Button variant="outline" size="sm" onClick={loadCatalog} disabled={loading} aria-label="Refresh database catalog"><RefreshCw className={cn("size-3.5", loading && "animate-spin")} /><span className="hidden sm:inline">Refresh</span></Button></> : workspace === "memory" ? <Badge variant="warning"><Pencil className="size-3" />Editable Markdown</Badge> : <Badge variant="secondary"><ShieldCheck className="size-3" />Read-only JSONL</Badge>}</div>
         </header>
-        {mobileMenu && <div className="space-y-2 border-b bg-white p-3 lg:hidden"><div className="grid grid-cols-2 gap-2"><Button variant={workspace === "databases" ? "default" : "outline"} size="sm" onClick={() => setWorkspace("databases")}><Database className="size-3.5" />Databases</Button><Button variant={workspace === "memory" ? "default" : "outline"} size="sm" onClick={() => setWorkspace("memory")}><Brain className="size-3.5" />Memory</Button></div>{workspace === "databases" && <select value={selectedId} onChange={(event) => { setSelectedId(event.target.value); setMobileMenu(false); }} className="h-10 w-full rounded-lg border bg-white px-3 text-sm">{databases.map((item) => <option key={item.id} value={item.id}>{item.group} / {item.name}</option>)}</select>}</div>}
+        {mobileMenu && <div className="space-y-2 border-b bg-white p-3 lg:hidden"><div className="grid grid-cols-3 gap-2"><Button variant={workspace === "databases" ? "default" : "outline"} size="sm" onClick={() => setWorkspace("databases")}><Database className="size-3.5" /><span className="hidden sm:inline">Databases</span></Button><Button variant={workspace === "memory" ? "default" : "outline"} size="sm" onClick={() => setWorkspace("memory")}><Brain className="size-3.5" /><span className="hidden sm:inline">Memory</span></Button><Button variant={workspace === "sessions" ? "default" : "outline"} size="sm" onClick={() => setWorkspace("sessions")}><MessageSquareText className="size-3.5" /><span className="hidden sm:inline">Sessions</span></Button></div>{workspace === "databases" && <select value={selectedId} onChange={(event) => { setSelectedId(event.target.value); setMobileMenu(false); }} className="h-10 w-full rounded-lg border bg-white px-3 text-sm">{databases.map((item) => <option key={item.id} value={item.id}>{item.group} / {item.name}</option>)}</select>}</div>}
         <div className="px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
-          {workspace === "memory" ? <MemoryWorkspace /> : error ? <EmptyState title="Could not open Codex data" description={error} /> : !database ? <LoadingState label="Discovering SQLite stores" /> : <>
+          {workspace === "memory" ? <MemoryWorkspace /> : workspace === "sessions" ? <SessionWorkspace /> : error ? <EmptyState title="Could not open Codex data" description={error} /> : !database ? <LoadingState label="Discovering SQLite stores" /> : <>
             <div className="mb-6 flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between"><div><div className="mb-2 flex items-center gap-2"><Badge variant="secondary">{database.group}</Badge><span className="text-xs text-muted-foreground">Updated {formatDate(database.modifiedAt)}</span></div><h1 className="text-2xl font-semibold tracking-[-0.035em] sm:text-3xl">{database.name}</h1><p className="mt-1 max-w-2xl text-sm text-muted-foreground">Explore records, inspect schema, and analyze this local Codex store without changing it.</p></div><div className="flex max-w-full gap-1 overflow-x-auto rounded-xl border bg-white p-1 shadow-sm">{tabs.map((item) => <button key={item.id} onClick={() => setTab(item.id)} className={cn("flex h-8 shrink-0 items-center gap-1.5 rounded-lg px-3 text-xs font-medium transition", tab === item.id ? "bg-[#17202d] text-white shadow-sm" : "text-muted-foreground hover:bg-muted hover:text-foreground")}><item.icon className="size-3.5" />{item.label}</button>)}</div></div>
             {tab === "overview" && <Overview key={`${database.id}-${refreshKey}`} database={database} />}
             {tab === "browser" && <TableBrowser key={database.id} database={database} />}

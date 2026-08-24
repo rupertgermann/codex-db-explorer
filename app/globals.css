@@ -74,6 +74,6 @@ button { cursor: pointer; }
 .memory-markdown hr { margin: 1.5rem 0; border-color: var(--border); }
 .memory-markdown input[type="checkbox"] { margin-right: .4rem; }
 
-@media (max-width: 900px) {
+@media (max-width: 1023px) {
   .desktop-sidebar { display: none; }
 }
