@@ -1,6 +1,6 @@
 # Codex DB Explorer
 
-A local Next.js interface for exploring Codex SQLite databases, the complete Markdown memory corpus, and JSONL session history.
+A local Next.js interface for exploring the OpenAI Codex CLI's SQLite databases, the complete Markdown memory corpus, and JSONL session history stored under `~/.codex`.
 
 > **Runs on your machine, against your data.** No telemetry, no external services, no data leaves your device.
 
@@ -59,10 +59,22 @@ CODEX_DB_DIRECTORY=/absolute/path/to/databases npm run dev
 npm run typecheck
 npm run lint
 npm run build
+npm test
 ```
 
 Node 24 or newer is recommended because the app uses the built-in `node:sqlite` module and does not need a native SQLite package.
 Session full-text search also expects [`rg` (ripgrep)](https://github.com/BurntSushi/ripgrep) on `PATH`.
+
+## Tech stack
+
+- [Next.js 16](https://nextjs.org/) (App Router) with React 19 and TypeScript
+- [Tailwind CSS 4](https://tailwindcss.com/) with Radix UI primitives and shadcn/ui components
+- [Recharts](https://recharts.org/) for analytics, [react-markdown](https://github.com/remarkjs/react-markdown) + `remark-gfm` for Markdown rendering
+- Node's built-in `node:sqlite` for read-only database access
+
+## Contributing
+
+Issues and pull requests are welcome. Please run the checks above before opening a PR.
 
 ## License
 
