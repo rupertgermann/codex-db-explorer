@@ -28,6 +28,7 @@ test("previews, applies, and manually rechecks one visible Summary Memory", asyn
 test("reaches orphan deletion only through the dedicated advanced workflow", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Markdown memory" }).click();
+  await page.getByRole("combobox").selectOption("rollout_summaries");
   await page.getByRole("button", { name: /rollout_summaries\/orphan\.md/ }).click();
 
   await expect(page.getByRole("button", { name: "Delete", exact: true })).toHaveCount(0);
