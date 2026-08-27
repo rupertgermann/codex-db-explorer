@@ -24,7 +24,9 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { MemoryForgetDialog, type ForgetRecheck } from "@/components/memory-forget-dialog";
 import { cn, formatBytes, formatDate, formatNumber } from "@/lib/utils";
+import type { ForgetPlan, ForgetResult } from "@/lib/memory-forget";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -54,7 +56,6 @@ type SearchResult = {
   matches: { line: number; excerpt: string }[];
   matchCount: number;
 };
-
 async function memoryRequest<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, { cache: "no-store", ...init });
   const data = await response.json();
@@ -83,10 +84,20 @@ function Metric({ label, value, detail, icon: Icon }: { label: string; value: st
   );
 }
 
-function MarkdownPreview({ content }: { content: string }) {
+function MarkdownPreview({ content, onForgetLine }: { content: string; onForgetLine?: (line: number) => void }) {
+  const lines = content.split(/\r?\n/);
   return (
     <article className="memory-markdown mx-auto max-w-3xl p-6 text-sm leading-7 text-slate-700 sm:p-8">
-      <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          li: ({ node, children, ...props }) => {
+            const line = node?.position?.start.line;
+            const forgettable = line !== undefined && lines[line - 1]?.startsWith("- ");
+            return <li {...props}>{children}{forgettable && onForgetLine && <button type="button" onClick={() => onForgetLine(line)} className="ml-2 inline-flex rounded border border-red-200 px-1.5 py-0.5 text-[10px] font-medium leading-4 text-red-700 hover:bg-red-50">Forget…</button>}</li>;
+          },
+        }}
+      >{content}</ReactMarkdown>
     </article>
   );
 }
@@ -104,6 +115,13 @@ export function MemoryWorkspace() {
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [forgetOpen, setForgetOpen] = useState(false);
+  const [forgetPlan, setForgetPlan] = useState<ForgetPlan | null>(null);
+  const [forgetResult, setForgetResult] = useState<ForgetResult | null>(null);
+  const [forgetRecheck, setForgetRecheck] = useState<ForgetRecheck | null>(null);
+  const [forgetLoading, setForgetLoading] = useState(false);
+  const [forgetError, setForgetError] = useState<string | null>(null);
+  const [confirmedDurableIds, setConfirmedDurableIds] = useState<string[]>([]);
   const [message, setMessage] = useState<{ kind: "success" | "error"; text: string } | null>(null);
 
   const dirty = document !== null && editedContent !== document.content;
@@ -211,6 +229,55 @@ export function MemoryWorkspace() {
     } finally { setDeleting(false); }
   }
 
+  async function previewForget(summaryLine: number, durableIds: string[] = []) {
+    if (!document || document.path !== "memory_summary.md" || dirty) return;
+    setForgetOpen(true); setForgetLoading(true); setForgetError(null); setForgetResult(null); setForgetRecheck(null);
+    try {
+      const plan = await memoryRequest<ForgetPlan>("/api/memory/forget", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "preview", selection: { summaryLine, expectedSummaryHash: document.hash, confirmedDurableIds: durableIds } }),
+      });
+      setForgetPlan(plan);
+      setConfirmedDurableIds(durableIds.length ? durableIds : plan.durableCandidates.length === 1 ? [plan.durableCandidates[0].id] : []);
+    } catch (error) {
+      setForgetError(error instanceof Error ? error.message : "Could not preview this Forget plan.");
+    } finally { setForgetLoading(false); }
+  }
+
+  async function applyForget() {
+    if (!forgetPlan?.actionable) return;
+    setForgetLoading(true); setForgetError(null);
+    try {
+      const result = await memoryRequest<ForgetResult>("/api/memory/forget", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "apply", plan: forgetPlan }),
+      });
+      setForgetResult(result);
+      const next = await memorySnapshot(false);
+      setCatalog(next.catalog);
+      const refreshed = await memoryRequest<MemoryDocument>("/api/memory/document?path=memory_summary.md");
+      setDocument(refreshed); setEditedContent(refreshed.content);
+    } catch (error) {
+      setForgetError(error instanceof Error ? error.message : "Could not apply this Forget plan.");
+    } finally { setForgetLoading(false); }
+  }
+
+  async function recheckForget() {
+    if (!forgetPlan) return;
+    setForgetLoading(true); setForgetError(null);
+    try {
+      setForgetRecheck(await memoryRequest<ForgetRecheck>("/api/memory/forget", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "recheck", plan: forgetPlan }),
+      }));
+    } catch (error) {
+      setForgetError(error instanceof Error ? error.message : "Could not recheck this Memory.");
+    } finally { setForgetLoading(false); }
+  }
+
   const visibleFiles = useMemo(() => catalog?.files.filter((file) => directory === "All" || file.directory === directory) ?? [], [catalog, directory]);
   const directoryCounts = useMemo(() => catalog?.files.reduce<Record<string, number>>((counts, file) => ({ ...counts, [file.directory]: (counts[file.directory] ?? 0) + 1 }), {}) ?? {}, [catalog]);
   const maxTerm = catalog?.topTerms[0]?.count ?? 1;
@@ -243,7 +310,7 @@ export function MemoryWorkspace() {
         </Card>
 
         <Card className="min-w-0 overflow-hidden">
-          {document ? <Fragment><div className="flex flex-col gap-3 border-b px-4 py-3 sm:flex-row sm:items-center sm:justify-between"><div className="min-w-0"><div className="flex items-center gap-2"><p className="truncate text-sm font-semibold">{document.title}</p>{dirty && <Badge variant="warning">unsaved</Badge>}</div><p className="truncate font-mono text-[10px] text-muted-foreground">{document.path}</p></div><div className="flex items-center gap-2"><div className="flex rounded-lg border bg-muted/40 p-0.5"><button onClick={() => setView("edit")} className={cn("flex h-7 items-center gap-1 rounded-md px-2 text-[11px]", view === "edit" ? "bg-white font-medium shadow-sm" : "text-muted-foreground")}><Pencil className="size-3" />Edit</button><button onClick={() => setView("preview")} className={cn("flex h-7 items-center gap-1 rounded-md px-2 text-[11px]", view === "preview" ? "bg-white font-medium shadow-sm" : "text-muted-foreground")}><Eye className="size-3" />Preview</button></div><Button variant="outline" size="sm" onClick={() => setDeleteOpen(true)} disabled={deleting || documentLoading} className="border-red-200 text-red-700 hover:bg-red-50 hover:text-red-800"><Trash2 className="size-3.5" /><span className="hidden sm:inline">Delete</span></Button><Button size="sm" onClick={save} disabled={!dirty || saving}>{saving ? <Loader2 className="size-3.5 animate-spin" /> : <Save className="size-3.5" />}Save</Button></div></div>{documentLoading ? <div className="flex min-h-[600px] items-center justify-center gap-2 text-sm text-muted-foreground"><Loader2 className="size-4 animate-spin" />Opening file…</div> : view === "edit" ? <textarea value={editedContent} onChange={(event) => setEditedContent(event.target.value)} spellCheck={false} className="scrollbar-thin min-h-[680px] w-full resize-y bg-[#151c27] p-5 font-mono text-[12px] leading-6 text-slate-200 outline-none" /> : <div className="scrollbar-thin min-h-[680px] max-h-[760px] overflow-y-auto bg-white"><MarkdownPreview content={editedContent} /></div>}<div className="flex flex-wrap items-center justify-between gap-2 border-t px-4 py-2 text-[10px] text-muted-foreground"><span>{formatNumber(editedContent.length)} characters · {formatNumber(editedContent.match(/[\p{L}\p{N}][\p{L}\p{N}_'-]*/gu)?.length ?? 0)} words</span><span>Loaded {formatDate(document.modifiedAt)} · rev {document.hash.slice(0, 8)}</span></div></Fragment> : <div className="flex min-h-[680px] items-center justify-center text-sm text-muted-foreground">Select a memory file.</div>}
+          {document ? <Fragment><div className="flex flex-col gap-3 border-b px-4 py-3 sm:flex-row sm:items-center sm:justify-between"><div className="min-w-0"><div className="flex items-center gap-2"><p className="truncate text-sm font-semibold">{document.title}</p>{dirty && <Badge variant="warning">unsaved</Badge>}</div><p className="truncate font-mono text-[10px] text-muted-foreground">{document.path}</p></div><div className="flex items-center gap-2"><div className="flex rounded-lg border bg-muted/40 p-0.5"><button onClick={() => setView("edit")} className={cn("flex h-7 items-center gap-1 rounded-md px-2 text-[11px]", view === "edit" ? "bg-white font-medium shadow-sm" : "text-muted-foreground")}><Pencil className="size-3" />Edit</button><button onClick={() => setView("preview")} className={cn("flex h-7 items-center gap-1 rounded-md px-2 text-[11px]", view === "preview" ? "bg-white font-medium shadow-sm" : "text-muted-foreground")}><Eye className="size-3" />Preview</button></div><Button variant="outline" size="sm" onClick={() => setDeleteOpen(true)} disabled={deleting || documentLoading} className="border-red-200 text-red-700 hover:bg-red-50 hover:text-red-800"><Trash2 className="size-3.5" /><span className="hidden sm:inline">Delete</span></Button><Button size="sm" onClick={save} disabled={!dirty || saving}>{saving ? <Loader2 className="size-3.5 animate-spin" /> : <Save className="size-3.5" />}Save</Button></div></div>{documentLoading ? <div className="flex min-h-[600px] items-center justify-center gap-2 text-sm text-muted-foreground"><Loader2 className="size-4 animate-spin" />Opening file…</div> : view === "edit" ? <textarea value={editedContent} onChange={(event) => setEditedContent(event.target.value)} spellCheck={false} className="scrollbar-thin min-h-[680px] w-full resize-y bg-[#151c27] p-5 font-mono text-[12px] leading-6 text-slate-200 outline-none" /> : <div className="scrollbar-thin min-h-[680px] max-h-[760px] overflow-y-auto bg-white"><MarkdownPreview content={editedContent} onForgetLine={document.path === "memory_summary.md" && !dirty ? previewForget : undefined} /></div>}<div className="flex flex-wrap items-center justify-between gap-2 border-t px-4 py-2 text-[10px] text-muted-foreground"><span>{formatNumber(editedContent.length)} characters · {formatNumber(editedContent.match(/[\p{L}\p{N}][\p{L}\p{N}_'-]*/gu)?.length ?? 0)} words</span><span>Loaded {formatDate(document.modifiedAt)} · rev {document.hash.slice(0, 8)}</span></div></Fragment> : <div className="flex min-h-[680px] items-center justify-center text-sm text-muted-foreground">Select a memory file.</div>}
         </Card>
 
         <div className="space-y-5 xl:col-span-2 xl:grid xl:grid-cols-2 xl:gap-5 xl:space-y-0 2xl:col-span-1 2xl:block 2xl:space-y-5">
@@ -266,6 +333,21 @@ export function MemoryWorkspace() {
           </div>
         </DialogContent>
       </Dialog>
+
+      <MemoryForgetDialog
+        open={forgetOpen}
+        loading={forgetLoading}
+        error={forgetError}
+        plan={forgetPlan}
+        result={forgetResult}
+        recheck={forgetRecheck}
+        confirmedDurableIds={confirmedDurableIds}
+        onOpenChange={setForgetOpen}
+        onConfirm={(id, confirmed) => setConfirmedDurableIds((ids) => confirmed ? [...new Set([...ids, id])] : ids.filter((item) => item !== id))}
+        onRefresh={() => { if (forgetPlan) void previewForget(forgetPlan.selection.summaryLine, confirmedDurableIds); }}
+        onApply={() => { void applyForget(); }}
+        onRecheck={() => { void recheckForget(); }}
+      />
     </div>
   );
 }

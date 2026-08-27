@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
@@ -72,6 +72,19 @@ test("reads a document and searches all Markdown with line-level matches", () =>
     },
   ]);
   assert.deepEqual(repository.search("   "), []);
+});
+
+test("keeps document paths relative to a logical root that resolves through a symlink", () => {
+  const parent = memoryRoot();
+  const actualRoot = join(parent, "actual");
+  const linkedRoot = join(parent, "linked");
+  mkdirSync(actualRoot);
+  symlinkSync(actualRoot, linkedRoot, "dir");
+  writeFileSync(join(actualRoot, "memory_summary.md"), "# Summary\n");
+
+  const document = new MemoryRepository(linkedRoot).read("memory_summary.md");
+
+  assert.equal(document.path, "memory_summary.md");
 });
 
 test("saves atomically only when the opened revision is still current", () => {

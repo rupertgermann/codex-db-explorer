@@ -16,6 +16,7 @@ A local Next.js interface for exploring the OpenAI Codex CLI's SQLite databases,
 - Analyzes corpus size, structure, directories, and frequent terms
 - Searches all memory content with file and line-level matches
 - Edits Markdown with a GFM preview, stale-revision detection, and atomic replacement
+- Previews and applies one explicitly confirmed Memory Forget plan with external backup, rollback, a delete tombstone, and manual resurfacing checks
 - Indexes every JSONL file under `~/.codex/sessions` without scanning the full archive on page load
 - Browses human messages and tool calls with per-session event analysis
 - Distinguishes user, Codex-subtask, automation, and legacy sessions and browses their parent-child relationships as an expandable thread forest
@@ -25,7 +26,7 @@ A local Next.js interface for exploring the OpenAI Codex CLI's SQLite databases,
 ## Privacy & security
 
 - Databases are opened with SQLite's read-only flag; the query endpoint rejects write and schema-changing statements.
-- Memory files change only when you explicitly press **Save**. Immediately before an atomic replacement, a revision hash rejects a stale editor copy.
+- Memory files change only when you explicitly press **Save**, **Delete file**, or **Apply Forget plan**. Forget revalidates every planned revision, creates a recoverable backup outside the corpus, rolls partial writes back, and never includes session JSONL files.
 - Session files are strictly read-only. Large previews state exactly why content was omitted. A complete transcript scan reads the full file while retaining at most 20,000 entries; the Raw JSONL viewer reads one fixed-size byte page at a time.
 - The app reads whatever is in `~/.codex` — that can include prompts, conversations, and memories. Treat any screenshot, CSV export, or shared query result as potentially sensitive.
 - Intended for `localhost` only. The API routes have **no authentication**, so anyone who can reach the port can read databases and edit memory Markdown. Do not deploy this or bind it to a public interface.
@@ -60,6 +61,10 @@ npm run typecheck
 npm run lint
 npm run build
 npm test
+npm run test:acceptance
+npm run test:coverage
+npm run test:e2e
+npm run test:mutation
 ```
 
 Node 24 or newer is recommended because the app uses the built-in `node:sqlite` module and does not need a native SQLite package.
