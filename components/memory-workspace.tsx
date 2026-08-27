@@ -16,6 +16,7 @@ import {
   Save,
   Search,
   Text,
+  Trash2,
   X,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -23,8 +24,11 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { MemoryForgetDialog, type ForgetRecheck } from "@/components/memory-forget-dialog";
+import { MemoryOrphanDialog } from "@/components/memory-orphan-dialog";
 import { cn, formatBytes, formatDate, formatNumber } from "@/lib/utils";
 import type { ForgetPlan, ForgetResult } from "@/lib/memory-forget";
+import type { OrphanPlan, OrphanResult } from "@/lib/memory-orphan";
+import { isAggregateMemoryPath } from "@/lib/memory-policy";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -104,10 +108,10 @@ export function MemoryWorkspace() {
   const [catalog, setCatalog] = useState<MemoryCatalog | null>(null);
   const [document, setDocument] = useState<MemoryDocument | null>(null);
   const [editedContent, setEditedContent] = useState("");
-  const [directory, setDirectory] = useState("All");
+  const [directory, setDirectory] = useState("Root");
   const [query, setQuery] = useState("");
   const [searchResults, setSearchResults] = useState<SearchResult[] | null>(null);
-  const [view, setView] = useState<"edit" | "preview">("edit");
+  const [view, setView] = useState<"edit" | "preview">("preview");
   const [loading, setLoading] = useState(true);
   const [documentLoading, setDocumentLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -118,6 +122,11 @@ export function MemoryWorkspace() {
   const [forgetLoading, setForgetLoading] = useState(false);
   const [forgetError, setForgetError] = useState<string | null>(null);
   const [confirmedDurableIds, setConfirmedDurableIds] = useState<string[]>([]);
+  const [orphanOpen, setOrphanOpen] = useState(false);
+  const [orphanPlan, setOrphanPlan] = useState<OrphanPlan | null>(null);
+  const [orphanResult, setOrphanResult] = useState<OrphanResult | null>(null);
+  const [orphanLoading, setOrphanLoading] = useState(false);
+  const [orphanError, setOrphanError] = useState<string | null>(null);
   const [message, setMessage] = useState<{ kind: "success" | "error"; text: string } | null>(null);
 
   const dirty = document !== null && editedContent !== document.content;
@@ -127,7 +136,7 @@ export function MemoryWorkspace() {
     setDocumentLoading(true); setMessage(null);
     try {
       const next = await memoryRequest<MemoryDocument>(`/api/memory/document?path=${encodeURIComponent(path)}`);
-      setDocument(next); setEditedContent(next.content); setView("edit");
+      setDocument(next); setEditedContent(next.content); setView("preview");
     } catch (error) {
       setMessage({ kind: "error", text: error instanceof Error ? error.message : "Could not open memory file." });
     } finally { setDocumentLoading(false); }
@@ -247,6 +256,44 @@ export function MemoryWorkspace() {
     } finally { setForgetLoading(false); }
   }
 
+  async function inspectOrphan() {
+    if (!document || isAggregateMemoryPath(document.path) || dirty) return;
+    setOrphanOpen(true); setOrphanLoading(true); setOrphanError(null); setOrphanPlan(null); setOrphanResult(null);
+    try {
+      setOrphanPlan(await memoryRequest<OrphanPlan>("/api/memory/orphan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "inspect", path: document.path }),
+      }));
+    } catch (error) {
+      setOrphanError(error instanceof Error ? error.message : "Could not inspect this orphan candidate.");
+    } finally { setOrphanLoading(false); }
+  }
+
+  async function applyOrphan() {
+    if (!orphanPlan?.eligible) return;
+    setOrphanLoading(true); setOrphanError(null);
+    try {
+      const result = await memoryRequest<OrphanResult>("/api/memory/orphan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "apply", plan: orphanPlan, confirmation: { path: orphanPlan.path, expectedHash: orphanPlan.expectedHash } }),
+      });
+      setOrphanResult(result);
+      const next = await memorySnapshot(false);
+      setCatalog(next.catalog);
+      const fallback = next.catalog.files.find(({ path }) => path === "MEMORY.md") ?? next.catalog.files[0];
+      if (fallback) {
+        const refreshed = await memoryRequest<MemoryDocument>(`/api/memory/document?path=${encodeURIComponent(fallback.path)}`);
+        setDocument(refreshed); setEditedContent(refreshed.content); setView("edit");
+      } else {
+        setDocument(null); setEditedContent("");
+      }
+    } catch (error) {
+      setOrphanError(error instanceof Error ? error.message : "Could not delete this orphan file.");
+    } finally { setOrphanLoading(false); }
+  }
+
   const visibleFiles = useMemo(() => catalog?.files.filter((file) => directory === "All" || file.directory === directory) ?? [], [catalog, directory]);
   const directoryCounts = useMemo(() => catalog?.files.reduce<Record<string, number>>((counts, file) => ({ ...counts, [file.directory]: (counts[file.directory] ?? 0) + 1 }), {}) ?? {}, [catalog]);
   const maxTerm = catalog?.topTerms[0]?.count ?? 1;
@@ -256,9 +303,9 @@ export function MemoryWorkspace() {
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
-        <div><div className="mb-2 flex items-center gap-2"><Badge className="border-cyan-200 bg-cyan-50 text-cyan-700"><Brain className="size-3" />Markdown corpus</Badge><span className="text-xs text-muted-foreground">{catalog.root}</span></div><h1 className="text-2xl font-semibold tracking-[-0.035em] sm:text-3xl">Codex Memory</h1><p className="mt-1 max-w-2xl text-sm text-muted-foreground">Search and analyze the complete Markdown corpus, then edit files with revision-checked atomic saves.</p></div>
-        <Button variant="outline" size="sm" onClick={loadCatalog} disabled={loading}><RefreshCw className={cn("size-3.5", loading && "animate-spin")} />Refresh analysis</Button>
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0"><div className="mb-2 flex items-center gap-2"><Badge className="border-cyan-200 bg-cyan-50 text-cyan-700"><Brain className="size-3" />Markdown corpus</Badge><span className="truncate text-xs text-muted-foreground">{catalog.root}</span></div><h1 className="text-2xl font-semibold tracking-[-0.035em] sm:text-3xl">Codex Memory</h1><p className="mt-1 max-w-2xl text-sm text-muted-foreground">Search and analyze the complete Markdown corpus, then edit files with revision-checked atomic saves.</p></div>
+        <Button variant="outline" size="sm" className="shrink-0 self-start" onClick={loadCatalog} disabled={loading}><RefreshCw className={cn("size-3.5", loading && "animate-spin")} />Refresh analysis</Button>
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
@@ -270,11 +317,11 @@ export function MemoryWorkspace() {
 
       {message && <div className={cn("flex items-center justify-between rounded-lg border px-4 py-3 text-sm", message.kind === "success" ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-red-200 bg-red-50 text-red-700")}><span className="flex items-center gap-2">{message.kind === "success" ? <CheckCircle2 className="size-4" /> : <AlertTriangle className="size-4" />}{message.text}</span><button onClick={() => setMessage(null)} aria-label="Dismiss message"><X className="size-4" /></button></div>}
 
-      <div className="grid gap-5 xl:grid-cols-[280px_minmax(0,1fr)] 2xl:grid-cols-[300px_minmax(0,1fr)_280px]">
-        <Card className="min-w-0 overflow-hidden">
-          <CardHeader className="border-b p-4"><CardTitle className="text-sm">Memory files</CardTitle><CardDescription>Every Markdown file under the memory root</CardDescription><div className="relative pt-2"><Search className="absolute left-3 top-[26px] size-3.5 -translate-y-1/2 text-muted-foreground" /><Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search all contents…" className="pl-9 pr-8" />{query && <button onClick={() => setQuery("")} className="absolute right-3 top-[26px] -translate-y-1/2 text-muted-foreground"><X className="size-3.5" /></button>}</div>{!query && <select value={directory} onChange={(event) => setDirectory(event.target.value)} className="mt-2 h-8 w-full rounded-lg border bg-white px-2 text-xs"><option value="All">All directories ({catalog.files.length})</option>{catalog.directories.map((item) => <option key={item} value={item}>{item} ({directoryCounts[item]})</option>)}</select>}</CardHeader>
-          <CardContent className="scrollbar-thin max-h-[680px] overflow-y-auto p-2">
-            {searchResults !== null ? searchResults.length === 0 ? <p className="p-5 text-center text-xs text-muted-foreground">No matches for “{query}”.</p> : <div className="space-y-1">{searchResults.map((result) => <button key={result.path} onClick={() => loadDocument(result.path)} className={cn("w-full rounded-lg border p-3 text-left transition hover:border-indigo-200 hover:bg-indigo-50/40", document?.path === result.path && "border-indigo-300 bg-indigo-50")}><span className="flex items-start justify-between gap-2"><span className="min-w-0"><span className="block truncate text-xs font-semibold">{result.title}</span><span className="block truncate font-mono text-[9px] text-muted-foreground">{result.path}</span></span><Badge variant="secondary">{result.matchCount}</Badge></span>{result.matches.slice(0, 2).map((match, index) => <span key={`${match.line}-${index}`} className="mt-2 block border-l-2 border-indigo-200 pl-2 text-[10px] leading-4 text-muted-foreground"><b className="mr-1 text-indigo-500">L{match.line}</b>{match.excerpt}</span>)}</button>)}</div> : <div className="space-y-1">{visibleFiles.map((file) => <button key={file.path} onClick={() => loadDocument(file.path)} className={cn("flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition hover:bg-muted", document?.path === file.path && "bg-indigo-50 text-indigo-900")}><span className={cn("grid size-8 shrink-0 place-items-center rounded-lg", document?.path === file.path ? "bg-indigo-100 text-indigo-700" : "bg-muted text-muted-foreground")}><FileText className="size-3.5" /></span><span className="min-w-0 flex-1"><span className="block truncate text-xs font-medium">{file.title}</span><span className="block truncate font-mono text-[9px] text-muted-foreground">{file.path}</span></span><span className="text-[9px] tabular-nums text-muted-foreground">{formatBytes(file.size)}</span></button>)}</div>}
+      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)] 2xl:grid-cols-[minmax(0,1fr)_280px]">
+        <Card className="min-w-0 overflow-hidden lg:fixed lg:bottom-0 lg:left-0 lg:top-[209px] lg:z-40 lg:flex lg:w-[272px] lg:flex-col lg:rounded-none lg:border-x-0 lg:border-b-0 lg:border-white/10 lg:bg-[#17202d] lg:text-white lg:[&_.text-muted-foreground]:text-slate-400">
+          <CardHeader className="border-b p-4 lg:border-white/10"><CardTitle className="text-sm">Memory files</CardTitle><CardDescription>Every Markdown file under the memory root</CardDescription><div className="relative pt-2"><Search className="absolute left-3 top-[26px] size-3.5 -translate-y-1/2 text-muted-foreground" /><Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search all contents…" className="sidebar-form-border pl-9 pr-8 lg:bg-white/[0.06] lg:text-white lg:placeholder:text-slate-500" />{query && <button onClick={() => setQuery("")} className="absolute right-3 top-[26px] -translate-y-1/2 text-muted-foreground"><X className="size-3.5" /></button>}</div>{!query && <select value={directory} onChange={(event) => setDirectory(event.target.value)} className="sidebar-form-border mt-2 h-8 w-full rounded-lg border bg-white px-2 text-xs lg:bg-white/[0.06] lg:text-slate-200 lg:[&>option]:bg-white lg:[&>option]:text-slate-900"><option value="All">All directories ({catalog.files.length})</option>{catalog.directories.map((item) => <option key={item} value={item}>{item} ({directoryCounts[item]})</option>)}</select>}</CardHeader>
+          <CardContent className="scrollbar-thin max-h-[680px] overflow-y-auto p-2 lg:min-h-0 lg:max-h-none lg:flex-1">
+            {searchResults !== null ? searchResults.length === 0 ? <p className="p-5 text-center text-xs text-muted-foreground">No matches for “{query}”.</p> : <div className="space-y-1">{searchResults.map((result) => <button key={result.path} onClick={() => loadDocument(result.path)} className={cn("w-full rounded-lg border p-3 text-left transition hover:border-indigo-200 hover:bg-indigo-50/40 lg:border-white/10 lg:hover:border-cyan-300/20 lg:hover:bg-white/[0.06]", document?.path === result.path && "border-indigo-300 bg-indigo-50 lg:border-cyan-300/20 lg:bg-cyan-400/10 lg:text-cyan-100")}><span className="flex items-start justify-between gap-2"><span className="min-w-0"><span className="block truncate text-xs font-semibold">{result.title}</span><span className="block truncate font-mono text-[9px] text-muted-foreground">{result.path}</span></span><Badge variant="secondary">{result.matchCount}</Badge></span>{result.matches.slice(0, 2).map((match, index) => <span key={`${match.line}-${index}`} className="mt-2 block border-l-2 border-indigo-200 pl-2 text-[10px] leading-4 text-muted-foreground lg:border-cyan-300/20"><b className="mr-1 text-indigo-500 lg:text-cyan-300">L{match.line}</b>{match.excerpt}</span>)}</button>)}</div> : <div className="space-y-1">{visibleFiles.map((file) => <button key={file.path} onClick={() => loadDocument(file.path)} className={cn("flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition hover:bg-muted lg:hover:bg-white/[0.06]", document?.path === file.path && "bg-indigo-50 text-indigo-900 lg:bg-cyan-400/10 lg:text-cyan-100")}><span className={cn("grid size-8 shrink-0 place-items-center rounded-lg", document?.path === file.path ? "bg-indigo-100 text-indigo-700 lg:bg-cyan-400/10 lg:text-cyan-300" : "bg-muted text-muted-foreground lg:bg-white/[0.06]")}><FileText className="size-3.5" /></span><span className="min-w-0 flex-1"><span className="block truncate text-xs font-medium">{file.title}</span><span className="block truncate font-mono text-[9px] text-muted-foreground">{file.path}</span></span><span className="text-[9px] tabular-nums text-muted-foreground">{formatBytes(file.size)}</span></button>)}</div>}
           </CardContent>
         </Card>
 
@@ -282,9 +329,10 @@ export function MemoryWorkspace() {
           {document ? <Fragment><div className="flex flex-col gap-3 border-b px-4 py-3 sm:flex-row sm:items-center sm:justify-between"><div className="min-w-0"><div className="flex items-center gap-2"><p className="truncate text-sm font-semibold">{document.title}</p>{dirty && <Badge variant="warning">unsaved</Badge>}</div><p className="truncate font-mono text-[10px] text-muted-foreground">{document.path}</p></div><div className="flex items-center gap-2"><div className="flex rounded-lg border bg-muted/40 p-0.5"><button onClick={() => setView("edit")} className={cn("flex h-7 items-center gap-1 rounded-md px-2 text-[11px]", view === "edit" ? "bg-white font-medium shadow-sm" : "text-muted-foreground")}><Pencil className="size-3" />Edit</button><button onClick={() => setView("preview")} className={cn("flex h-7 items-center gap-1 rounded-md px-2 text-[11px]", view === "preview" ? "bg-white font-medium shadow-sm" : "text-muted-foreground")}><Eye className="size-3" />Preview</button></div><Button size="sm" onClick={save} disabled={!dirty || saving}>{saving ? <Loader2 className="size-3.5 animate-spin" /> : <Save className="size-3.5" />}Save</Button></div></div>{documentLoading ? <div className="flex min-h-[600px] items-center justify-center gap-2 text-sm text-muted-foreground"><Loader2 className="size-4 animate-spin" />Opening file…</div> : view === "edit" ? <textarea value={editedContent} onChange={(event) => setEditedContent(event.target.value)} spellCheck={false} className="scrollbar-thin min-h-[680px] w-full resize-y bg-[#151c27] p-5 font-mono text-[12px] leading-6 text-slate-200 outline-none" /> : <div className="scrollbar-thin min-h-[680px] max-h-[760px] overflow-y-auto bg-white"><MarkdownPreview content={editedContent} onForgetLine={document.path === "memory_summary.md" && !dirty ? previewForget : undefined} /></div>}<div className="flex flex-wrap items-center justify-between gap-2 border-t px-4 py-2 text-[10px] text-muted-foreground"><span>{formatNumber(editedContent.length)} characters · {formatNumber(editedContent.match(/[\p{L}\p{N}][\p{L}\p{N}_'-]*/gu)?.length ?? 0)} words</span><span>Loaded {formatDate(document.modifiedAt)} · rev {document.hash.slice(0, 8)}</span></div></Fragment> : <div className="flex min-h-[680px] items-center justify-center text-sm text-muted-foreground">Select a memory file.</div>}
         </Card>
 
-        <div className="space-y-5 xl:col-span-2 xl:grid xl:grid-cols-2 xl:gap-5 xl:space-y-0 2xl:col-span-1 2xl:block 2xl:space-y-5">
+        <div className="space-y-5 xl:grid xl:grid-cols-2 xl:gap-5 xl:space-y-0 2xl:block 2xl:space-y-5">
           <Card><CardHeader><CardTitle className="flex items-center gap-2 text-sm"><Brain className="size-4 text-cyan-600" />Frequent terms</CardTitle><CardDescription>Most frequent non-stopwords across the corpus</CardDescription></CardHeader><CardContent className="space-y-2.5">{catalog.topTerms.slice(0, 12).map((item) => <div key={item.term}><div className="mb-1 flex items-center justify-between text-[11px]"><span className="truncate">{item.term}</span><span className="tabular-nums text-muted-foreground">{formatNumber(item.count)}</span></div><div className="h-1 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-cyan-500" style={{ width: `${Math.max(4, item.count / maxTerm * 100)}%` }} /></div></div>)}</CardContent></Card>
           <Card><CardHeader><CardTitle className="flex items-center gap-2 text-sm"><Folder className="size-4 text-indigo-500" />Corpus map</CardTitle><CardDescription>Markdown files by directory</CardDescription></CardHeader><CardContent className="space-y-2">{Object.entries(directoryCounts).sort(([, left], [, right]) => right - left).map(([name, count]) => <button key={name} onClick={() => { setQuery(""); setDirectory(name); }} className="flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-xs hover:bg-muted"><span className="truncate font-mono text-[10px]">{name}</span><Badge variant="secondary">{count}</Badge></button>)}</CardContent></Card>
+          <Card><CardHeader><CardTitle className="flex items-center gap-2 text-sm"><Trash2 className="size-4 text-red-500" />Advanced cleanup</CardTitle><CardDescription>Inspect dependencies before removing one whole non-core file</CardDescription></CardHeader><CardContent>{document && !isAggregateMemoryPath(document.path) ? <div className="space-y-2"><p className="font-mono text-[10px] text-muted-foreground">{document.path}</p><Button variant="outline" size="sm" onClick={() => { void inspectOrphan(); }} disabled={dirty}><Trash2 className="size-3.5" />Delete orphaned file…</Button>{dirty && <p className="text-[10px] text-amber-700">Save or discard editor changes before inspection.</p>}</div> : <p className="text-xs text-muted-foreground">Aggregate Memory files are never eligible. Use Forget for individual Memories.</p>}</CardContent></Card>
         </div>
       </div>
 
@@ -301,6 +349,16 @@ export function MemoryWorkspace() {
         onRefresh={() => { if (forgetPlan) void previewForget(forgetPlan.selection.summaryLine, confirmedDurableIds); }}
         onApply={() => { void applyForget(); }}
         onRecheck={() => { void recheckForget(); }}
+      />
+      <MemoryOrphanDialog
+        key={orphanPlan?.expectedHash ?? "empty-orphan-plan"}
+        open={orphanOpen}
+        loading={orphanLoading}
+        error={orphanError}
+        plan={orphanPlan}
+        result={orphanResult}
+        onOpenChange={setOrphanOpen}
+        onApply={() => { void applyOrphan(); }}
       />
     </div>
   );

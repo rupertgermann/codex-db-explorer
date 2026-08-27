@@ -17,6 +17,7 @@ A local Next.js interface for exploring the OpenAI Codex CLI's SQLite databases,
 - Searches all memory content with file and line-level matches
 - Edits Markdown with a GFM preview, stale-revision detection, and atomic replacement
 - Previews and applies one explicitly confirmed Memory Forget plan with external backup, rollback, a delete tombstone, and manual resurfacing checks; see the [Memory Forget user guide](docs/memory-forgetting.md)
+- Inspects dependencies before deleting one explicitly confirmed orphaned non-core Memory file, with revision revalidation and a verified external backup
 - Indexes every JSONL file under `~/.codex/sessions` without scanning the full archive on page load
 - Browses human messages and tool calls with per-session event analysis
 - Distinguishes user, Codex-subtask, automation, and legacy sessions and browses their parent-child relationships as an expandable thread forest
@@ -26,7 +27,7 @@ A local Next.js interface for exploring the OpenAI Codex CLI's SQLite databases,
 ## Privacy & security
 
 - Databases are opened with SQLite's read-only flag; the query endpoint rejects write and schema-changing statements.
-- Memory files change only when you explicitly press **Save** or **Apply Forget plan**. Forget is the only regular deletion path: it revalidates every planned revision, creates a recoverable backup outside the corpus, rolls partial writes back, and never includes session JSONL files.
+- Memory files change only when you explicitly press **Save**, **Apply Forget plan**, or confirm the separate advanced **Delete orphaned file…** workflow. Forget remains the only regular deletion path. Orphan cleanup blocks referenced files, session-linked files, positive Memories, and aggregate files; it revalidates the exact revision and verifies an external backup before deleting one confirmed file.
 - Session files are strictly read-only. Large previews state exactly why content was omitted. A complete transcript scan reads the full file while retaining at most 20,000 entries; the Raw JSONL viewer reads one fixed-size byte page at a time.
 - The app reads whatever is in `~/.codex` — that can include prompts, conversations, and memories. Treat any screenshot, CSV export, or shared query result as potentially sensitive.
 - Intended for `localhost` only. The API routes have **no authentication**, so anyone who can reach the port can read databases and edit memory Markdown. Do not deploy this or bind it to a public interface.
@@ -49,6 +50,7 @@ Then open [http://localhost:3000](http://localhost:3000).
 | `CODEX_DB_DIRECTORY` | – | Additional directory of SQLite files to include |
 | `CODEX_MEMORY_DIRECTORY` | `$CODEX_HOME/memories` | Markdown memory root |
 | `CODEX_SESSIONS_DIRECTORY` | `$CODEX_HOME/sessions` | JSONL session archive root |
+| `CODEX_ARCHIVED_SESSIONS_DIRECTORY` | `$CODEX_HOME/archived_sessions` | Archived JSONL root inspected read-only for orphan provenance |
 
 ```bash
 CODEX_DB_DIRECTORY=/absolute/path/to/databases npm run dev
