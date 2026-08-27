@@ -61,6 +61,7 @@ function canonical(content: string) {
   return content
     .replace(/^\s*-\s*/, "")
     .replace(/\[(?:Task\s+\d+|ad-hoc note)\]/gi, "")
+    .replace(/(?<![\p{L}\p{N}])(?:\/[\p{L}\p{N}.@+_-]+){2,}/gu, " ")
     .replace(/[^\p{L}\p{N}]+/gu, " ")
     .trim()
     .toLocaleLowerCase();
@@ -105,7 +106,9 @@ function durableProvenance(content: string, sections: ForgetSection[]) {
     const groupStart = groupStarts.findLast((start) => start <= section.startOffset) ?? 0;
     const groupEnd = groupStarts.find((start) => start > section.startOffset) ?? content.length;
     const group = content.slice(groupStart, groupEnd);
-    const taggedTasks = [...section.content.matchAll(/\[Task (\d+)\]/g)].map((match) => match[1]);
+    const taggedTasks = new Set([...section.content.matchAll(/\[Task (\d+)\]/g)].map((match) => match[1]));
+    const containingTask = taskAt(group, section.startOffset - groupStart, 2);
+    if (containingTask) taggedTasks.add(containingTask);
     for (const taskNumber of taggedTasks) {
       taskNumbers.add(taskNumber);
       const taskStart = group.search(new RegExp(`^## Task ${taskNumber}\\b`, "m"));
@@ -163,6 +166,49 @@ function bulletSections(path: string, kind: ForgetSectionKind, content: string):
   });
 }
 
+function rangeSection(
+  path: string,
+  kind: ForgetSectionKind,
+  content: string,
+  startOffset: number,
+  endOffset: number,
+  match: "exact" | "related",
+  signals: string[],
+): ForgetSection {
+  const before = content.slice(0, startOffset);
+  const through = content.slice(0, endOffset);
+  const base = {
+    kind,
+    path,
+    expectedHash: memoryHash(content),
+    startOffset,
+    endOffset,
+    startLine: (before.match(/\n/g)?.length ?? 0) + 1,
+    endLine: Math.max(1, (through.match(/\n/g)?.length ?? 0) + (through.endsWith("\n") ? 0 : 1)),
+    content: content.slice(startOffset, endOffset),
+    match,
+    signals,
+  };
+  return { ...base, id: sectionId(base) };
+}
+
+function durableTaskGroup(content: string, section: ForgetSection) {
+  const groups = [...content.matchAll(/^# Task Group:/gm)];
+  const groupIndex = groups.findLastIndex((match) => (match.index ?? 0) <= section.startOffset);
+  if (groupIndex < 0) return section;
+  const startOffset = groups[groupIndex].index ?? 0;
+  const endOffset = groups[groupIndex + 1]?.index ?? content.length;
+  return rangeSection(
+    section.path,
+    section.kind,
+    content,
+    startOffset,
+    endOffset,
+    section.match ?? "related",
+    [...new Set([...(section.signals ?? []), "task group"])],
+  );
+}
+
 function withoutRanges(content: string, sections: ForgetSection[]) {
   return [...sections]
     .sort((left, right) => right.startOffset - left.startOffset)
@@ -204,8 +250,10 @@ export class MemoryForgetService {
 
     const sourceTargets = new Set([target, ...confirmed.map((section) => canonical(section.content))]);
     const related = actionable ? this.relatedSections(sourceTargets, confirmed, selected.content, durableDocument.content) : [];
+    const durableSections = confirmed.map((section) => durableTaskGroup(durableDocument.content, section));
     const kindOrder: ForgetSectionKind[] = ["summary", "durable", "raw", "rollout", "ad-hoc"];
-    const sections = [selected, ...confirmed, ...related]
+    const sections = [selected, ...durableSections, ...related]
+      .filter((section, index, all) => all.findIndex(({ id }) => id === section.id) === index)
       .sort((left, right) => kindOrder.indexOf(left.kind) - kindOrder.indexOf(right.kind) || left.path.localeCompare(right.path));
 
     return {
@@ -335,22 +383,24 @@ export class MemoryForgetService {
     if (files.has("raw_memories.md") && provenance.threadIds.size > 0) {
       const content = repository.read("raw_memories.md").content;
       const threads = [...content.matchAll(/^## Thread `([^`]+)`/gm)];
-      for (const section of bulletSections("raw_memories.md", "raw", content)) {
-        const thread = threads.findLast((match) => (match.index ?? 0) <= section.startOffset)?.[1];
-        const task = taskAt(content, section.startOffset, 3);
-        if (thread && provenance.threadIds.has(thread)) {
-          linked.push(matchAny(section, targets, [`thread id ${thread}`, ...(task ? [`Task ${task}`] : [])], 0.4));
-        }
+      for (const [index, thread] of threads.entries()) {
+        if (!provenance.threadIds.has(thread[1])) continue;
+        linked.push(rangeSection(
+          "raw_memories.md",
+          "raw",
+          content,
+          thread.index ?? 0,
+          threads[index + 1]?.index ?? content.length,
+          "related",
+          [`thread id ${thread[1]}`],
+        ));
       }
     }
 
     for (const path of provenance.rolloutPaths) {
       if (!files.has(path)) continue;
       const content = repository.read(path).content;
-      for (const section of bulletSections(path, "rollout", content)) {
-        const task = taskAt(content, section.startOffset, 2);
-        linked.push(matchAny(section, targets, ["rollout reference", ...(task ? [`Task ${task}`] : [])], 0.4));
-      }
+      linked.push(rangeSection(path, "rollout", content, 0, content.length, "related", ["rollout reference"]));
     }
 
     const hasAdHocMarker = /\[ad-hoc note\]/i.test(summaryContent) || durable.some((section) => /\[ad-hoc note\]/i.test(section.content));
@@ -360,9 +410,15 @@ export class MemoryForgetService {
       }
     }
 
-    return [...exact, ...linked]
+    const sections = [...exact, ...linked]
       .filter((section): section is ForgetSection => section !== null)
       .filter((section, index, all) => all.findIndex(({ id }) => id === section.id) === index);
+    return sections.filter((section, index) => !sections.some((candidate, candidateIndex) =>
+      candidateIndex !== index
+      && candidate.path === section.path
+      && candidate.startOffset <= section.startOffset
+      && candidate.endOffset >= section.endOffset
+      && (candidate.startOffset < section.startOffset || candidate.endOffset > section.endOffset)));
   }
 
   private allSections() {

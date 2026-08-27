@@ -109,6 +109,63 @@ test("preview follows durable Task, thread, rollout, and ad-hoc provenance", () 
   assert.ok(plan.sections.find(({ kind }) => kind === "ad-hoc").signals.includes("ad-hoc marker"));
 });
 
+test("apply follows enclosing task provenance without matching unrelated paths", () => {
+  const { base, root } = fixture({ adHoc: false });
+  writeFileSync(join(root, "memory_summary.md"), [
+    "# Summary\n",
+    "- HUM PR #1390 re-review: private/environment/solr, query.type, queryFields, AuthUserFile\n",
+    "  - desc: Pinned read-only merge-blocker review; findings are head-SHA/time-specific; cwd=/Users/rupertgermann/Sites/hum-corporate-typo3.\n",
+  ].join("\n"));
+  writeFileSync(join(root, "MEMORY.md"), [
+    "# Task Group: HUM TYPO3 PR #1390 re-review\n",
+    "scope: Pinned read-only review of copied Solr release files and configuration/spec blockers.\n",
+    "## Task 1: Re-review merge blockers, success\n",
+    "### rollout_summary_files\n",
+    "- rollout_summaries/one.md (thread_id=thread-one)\n",
+    "### keywords\n",
+    "- PR #1390, private/environment/solr, query.type, queryFields, Solr isolation, AuthUserFile\n",
+    "## Reusable knowledge\n",
+    "- Review against immutable head/base; current head had four P1 spec blockers. [Task 1]\n",
+    "# Task Group: Unrelated\n",
+    "- Preserve unrelated facts. [Task 1]\n",
+  ].join("\n"));
+  writeFileSync(join(root, "raw_memories.md"), [
+    "# Raw\n",
+    "## Thread `thread-one`\n",
+    "### Task 1: Re-review PR #1390\n",
+    "- The user requested another read-only review excluding copied Solr release files.\n",
+    "- Four P1 blockers remain, including queryFields and AuthUserFile problems.\n",
+    "## Thread `thread-unrelated`\n",
+    "- Primary checkout: `/Users/rupertgermann/Sites/gbk-corporate-typo3/gbk-corporate-app`.\n",
+  ].join("\n"));
+  writeFileSync(join(root, "rollout_summaries", "one.md"), [
+    "thread_id: thread-one\n",
+    "# Re-review of PR #1390 remained blocked\n",
+    "## Task 1: Re-review PR #1390\n",
+    "- Semantic mode still overrides queryFields.\n",
+  ].join("\n"));
+  writeFileSync(join(root, "rollout_summaries", "unrelated.md"), "# Unrelated\n\n- Working directory: `/Users/rupertgermann/Sites/gbk-corporate-typo3`\n");
+  const service = new MemoryForgetService(root, join(base, "backups"));
+  const first = service.preview(selection(root));
+
+  const plan = service.preview({ ...selection(root), confirmedDurableIds: [first.durableCandidates[0].id] });
+
+  assert.deepEqual(plan.sections.map(({ kind }) => kind), ["summary", "durable", "raw", "rollout"]);
+  assert.match(plan.sections.find(({ kind }) => kind === "durable").content, /# Task Group: HUM TYPO3 PR #1390/);
+  assert.match(plan.sections.find(({ kind }) => kind === "raw").content, /## Thread `thread-one`/);
+  assert.equal(plan.sections.find(({ kind }) => kind === "rollout").path, "rollout_summaries/one.md");
+  assert.equal(plan.sections.some(({ path }) => path === "rollout_summaries/unrelated.md"), false);
+
+  const result = service.apply(plan);
+
+  assert.equal(result.verification, "suppressed");
+  assert.doesNotMatch(readFileSync(join(root, "MEMORY.md"), "utf8"), /PR #1390/);
+  assert.doesNotMatch(readFileSync(join(root, "raw_memories.md"), "utf8"), /thread-one/);
+  assert.match(readFileSync(join(root, "raw_memories.md"), "utf8"), /thread-unrelated/);
+  assert.equal(existsSync(join(root, "rollout_summaries", "one.md")), false);
+  assert.equal(existsSync(join(root, "rollout_summaries", "unrelated.md")), true);
+});
+
 test("preview reports no match and rejects stale or invalid summary selections", () => {
   const { base, root } = fixture();
   writeFileSync(join(root, "memory_summary.md"), "# Summary\n\n- Something with no durable source.\n");
