@@ -1,12 +1,12 @@
-import { NextResponse } from "next/server";
+import { type NextRequest, NextResponse } from "next/server";
 import { SessionRepository } from "@/lib/sessions";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-export function GET() {
+export function GET(request: NextRequest) {
   try {
-    return NextResponse.json(new SessionRepository().catalog(), {
+    return NextResponse.json(new SessionRepository().catalog({ refresh: request.nextUrl.searchParams.get("refresh") === "1" }), {
       headers: { "Cache-Control": "no-store" },
     });
   } catch (error) {

@@ -54,6 +54,7 @@ type SessionSummary = {
 
 type SessionCatalog = {
   root: string;
+  indexedAt: number;
   sessions: SessionSummary[];
   totals: { sessions: number; bytes: number; projects: number; activeDays: number };
   months: { month: string; sessions: number; bytes: number }[];
@@ -224,7 +225,7 @@ export function SessionWorkspace() {
   const [month, setMonth] = useState("All");
   const [provenance, setProvenance] = useState<"All" | SessionProvenance>("All");
   const [archiveNavigation, dispatchArchiveNavigation] = useReducer(sessionArchiveNavigation, {
-    view: "list",
+    view: "tree",
     selectedPath: "",
     expandedThreads: new Set<string>(),
   });
@@ -259,14 +260,14 @@ export function SessionWorkspace() {
     } finally { setSessionLoading(false); }
   }, []);
 
-  const loadCatalog = useCallback(async () => {
+  const refreshCatalog = useCallback(async () => {
     setLoading(true); setMessage(null);
     try {
-      const next = await sessionRequest<SessionCatalog>("/api/sessions");
+      const next = await sessionRequest<SessionCatalog>("/api/sessions?refresh=1");
       setCatalog(next);
       const selected = next.sessions.find((candidate) => candidate.path === session?.path) ?? next.sessions[0];
       if (selected) await loadSession(selected.path); else setSession(null);
-      setMessage({ kind: "success", text: `Analyzed ${formatNumber(next.totals.sessions)} session files.` });
+      setMessage({ kind: "success", text: `Indexed ${formatNumber(next.totals.sessions)} session files.` });
     } catch (error) {
       setMessage({ kind: "error", text: error instanceof Error ? error.message : "Could not load Codex sessions." });
     } finally { setLoading(false); }
@@ -423,12 +424,12 @@ export function SessionWorkspace() {
     <div className="space-y-5">
       <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
         <div><div className="mb-2 flex items-center gap-2"><Badge className="border-violet-200 bg-violet-50 text-violet-700"><MessageSquareText className="size-3" />JSONL corpus</Badge><span className="text-xs text-muted-foreground">{catalog.root}</span></div><h1 className="text-2xl font-semibold tracking-[-0.035em] sm:text-3xl">Codex Sessions</h1><p className="mt-1 max-w-3xl text-sm text-muted-foreground">Browse conversations, inspect tool activity, analyze projects and dates, or run an explicit full-text search across the local session archive.</p></div>
-        <Button variant="outline" size="sm" onClick={loadCatalog} disabled={loading} className="self-start xl:self-auto"><RefreshCw className={cn("size-3.5", loading && "animate-spin")} />Refresh index</Button>
+        <div className="flex items-center gap-3 self-start xl:self-auto"><span className="text-xs text-muted-foreground">Last indexed {formatDate(catalog.indexedAt)}</span><Button variant="outline" size="sm" onClick={refreshCatalog} disabled={loading}><RefreshCw className={cn("size-3.5", loading && "animate-spin")} />Refresh index</Button></div>
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <Metric label="Sessions" value={formatNumber(catalog.totals.sessions)} detail="Recursive JSONL files" icon={FileJson2} />
-        <Metric label="Archive size" value={formatBytes(catalog.totals.bytes)} detail="Metadata indexed on load" icon={HardDrive} />
+        <Metric label="Archive size" value={formatBytes(catalog.totals.bytes)} detail="Cached metadata index" icon={HardDrive} />
         <Metric label="Projects" value={formatNumber(catalog.totals.projects)} detail="Derived from working directories" icon={Folder} />
         <Metric label="Active days" value={formatNumber(catalog.totals.activeDays)} detail={`${catalog.months.length} calendar months`} icon={CalendarDays} />
       </div>

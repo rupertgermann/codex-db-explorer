@@ -44,6 +44,26 @@ test("catalogs JSONL sessions from metadata without treating other files as sess
   assert.deepEqual(catalog.months, [{ month: "2026-08", sessions: 2, bytes: catalog.totals.bytes }]);
 });
 
+test("reuses the session catalog until an explicit refresh", () => {
+  const root = sessionRoot();
+  writeSession(root, "2026/08/first.jsonl", [
+    { type: "session_meta", payload: { id: "first", cwd: "/work/alpha" } },
+  ]);
+  const repository = new SessionRepository(root);
+
+  const first = repository.catalog();
+  writeSession(root, "2026/08/second.jsonl", [
+    { type: "session_meta", payload: { id: "second", cwd: "/work/beta" } },
+  ]);
+  const cached = new SessionRepository(root).catalog();
+  const refreshed = repository.catalog({ refresh: true });
+
+  assert.strictEqual(cached, first);
+  assert.deepEqual(cached.sessions.map((session) => session.id), ["first"]);
+  assert.deepEqual(refreshed.sessions.map((session) => session.id).sort(), ["first", "second"]);
+  assert.ok(refreshed.indexedAt >= first.indexedAt);
+});
+
 test("classifies user, Codex, automation, and legacy session provenance", () => {
   const root = sessionRoot();
   writeSession(root, "2026/08/user.jsonl", [

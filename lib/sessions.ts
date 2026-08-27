@@ -22,6 +22,7 @@ export type SessionSummary = {
 
 export type SessionCatalog = {
   root: string;
+  indexedAt: number;
   sessions: SessionSummary[];
   totals: { sessions: number; bytes: number; projects: number; activeDays: number };
   months: { month: string; sessions: number; bytes: number }[];
@@ -93,6 +94,7 @@ const FULL_ENTRY_LIMIT = 20_000;
 const ENTRY_TEXT_LIMIT = 100_000;
 const SEARCH_TIMEOUT_MS = 20_000;
 const PROGRESS_INTERVAL = 4 * 1024 * 1024;
+const sessionCatalogCache = new Map<string, SessionCatalog>();
 
 export class SessionPathError extends Error {
   constructor(message = "The requested JSONL file is outside the sessions directory.") {
@@ -315,7 +317,10 @@ export class SessionRepository {
     this.root = resolve(root);
   }
 
-  catalog(): SessionCatalog {
+  catalog(options: { refresh?: boolean } = {}): SessionCatalog {
+    const cached = sessionCatalogCache.get(this.root);
+    if (cached && !options.refresh) return cached;
+
     const sessions = sessionPaths(this.root)
       .map((path) => summary(this.root, path))
       .sort((left, right) => right.startedAt - left.startedAt || left.path.localeCompare(right.path));
@@ -328,8 +333,9 @@ export class SessionRepository {
       const month = months.get(monthName) ?? { sessions: 0, bytes: 0 };
       month.sessions += 1; month.bytes += session.size; months.set(monthName, month);
     });
-    return {
+    const catalog = {
       root: this.root,
+      indexedAt: Date.now(),
       sessions,
       totals: {
         sessions: sessions.length,
@@ -345,6 +351,8 @@ export class SessionRepository {
         .sort((left, right) => right.sessions - left.sessions || right.bytes - left.bytes || left.project.localeCompare(right.project))
         .slice(0, 20),
     };
+    sessionCatalogCache.set(this.root, catalog);
+    return catalog;
   }
 
   async search(query: string): Promise<SessionSummary[]> {
