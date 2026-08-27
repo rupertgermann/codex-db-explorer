@@ -1,6 +1,8 @@
 /node_modules
 /.next
 /out
+/reports
+/test-results
 *.log
 *.tsbuildinfo
 .DS_Store
@@ -16,3 +18,4 @@
 *.db-shm
 *.csv
 .agents/*
+.stryker-tmp/

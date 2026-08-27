@@ -5,6 +5,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   renameSync,
   statSync,
   unlinkSync,
@@ -70,8 +71,43 @@ export class MemoryPathError extends Error {
   }
 }
 
-function hash(content: string) {
+export function memoryHash(content: string) {
   return createHash("sha256").update(content).digest("hex");
+}
+
+export function resolveMemoryMarkdownPath(root: string, path: string, mustExist = true) {
+  const resolvedRoot = resolve(root);
+  const absolutePath = resolve(resolvedRoot, path);
+  if (!absolutePath.startsWith(`${resolvedRoot}${sep}`) || extname(absolutePath).toLowerCase() !== ".md") throw new MemoryPathError();
+
+  if (mustExist) {
+    if (!existsSync(absolutePath) || !lstatSync(absolutePath).isFile()) throw new MemoryPathError("The requested memory file does not exist.");
+    const realRoot = realpathSync(resolvedRoot);
+    const realPath = realpathSync(absolutePath);
+    if (!realPath.startsWith(`${realRoot}${sep}`)) throw new MemoryPathError();
+    return realPath;
+  }
+
+  let parent = dirname(absolutePath);
+  while (!existsSync(parent)) parent = dirname(parent);
+  const realRoot = realpathSync(resolvedRoot);
+  const realParent = realpathSync(parent);
+  if (realParent !== realRoot && !realParent.startsWith(`${realRoot}${sep}`)) throw new MemoryPathError();
+  return absolutePath;
+}
+
+export function atomicMemoryWrite(path: string, content: string, expectedHash?: string) {
+  mkdirSync(dirname(path), { recursive: true });
+  const temporaryPath = join(dirname(path), `.${basename(path)}.${randomUUID()}.tmp`);
+  try {
+    const mode = existsSync(path) ? statSync(path).mode : 0o600;
+    writeFileSync(temporaryPath, content, { encoding: "utf8", mode });
+    if (expectedHash !== undefined && memoryHash(readFileSync(path, "utf8")) !== expectedHash) throw new MemoryConflictError();
+    renameSync(temporaryPath, path);
+  } catch (error) {
+    if (existsSync(temporaryPath)) unlinkSync(temporaryPath);
+    throw error;
+  }
 }
 
 function words(content: string) {
@@ -103,7 +139,7 @@ function summary(path: string, absolutePath: string, content: string): MemoryFil
     modifiedAt: file.mtimeMs,
     words: words(content).length,
     headings: headings(content).length,
-    hash: hash(content),
+    hash: memoryHash(content),
   };
 }
 
@@ -166,7 +202,8 @@ export class MemoryRepository {
   read(path: string): MemoryDocument {
     const absolutePath = this.resolveMarkdownPath(path);
     const content = readFileSync(absolutePath, "utf8");
-    return { ...summary(relative(this.root, absolutePath), absolutePath, content), content };
+    const logicalPath = relative(this.root, resolve(this.root, path));
+    return { ...summary(logicalPath, absolutePath, content), content };
   }
 
   search(query: string): MemorySearchResult[] {
@@ -194,35 +231,12 @@ export class MemoryRepository {
   save(input: { path: string; content: string; expectedHash: string }): MemoryDocument {
     const absolutePath = this.resolveMarkdownPath(input.path);
     const currentContent = readFileSync(absolutePath, "utf8");
-    if (hash(currentContent) !== input.expectedHash) throw new MemoryConflictError();
-    this.atomicWrite(absolutePath, input.content, input.expectedHash);
+    if (memoryHash(currentContent) !== input.expectedHash) throw new MemoryConflictError();
+    atomicMemoryWrite(absolutePath, input.content, input.expectedHash);
     return this.read(input.path);
   }
 
-  delete(input: { path: string; expectedHash: string }): void {
-    const absolutePath = this.resolveMarkdownPath(input.path);
-    const currentContent = readFileSync(absolutePath, "utf8");
-    if (hash(currentContent) !== input.expectedHash) throw new MemoryConflictError();
-    unlinkSync(absolutePath);
-  }
-
   private resolveMarkdownPath(path: string) {
-    const absolutePath = resolve(this.root, path);
-    if (!absolutePath.startsWith(`${this.root}${sep}`) || extname(absolutePath).toLowerCase() !== ".md") throw new MemoryPathError();
-    if (!existsSync(absolutePath) || !lstatSync(absolutePath).isFile()) throw new MemoryPathError("The requested memory file does not exist.");
-    return absolutePath;
-  }
-
-  private atomicWrite(path: string, content: string, expectedHash: string) {
-    mkdirSync(dirname(path), { recursive: true });
-    const temporaryPath = join(dirname(path), `.${basename(path)}.${randomUUID()}.tmp`);
-    try {
-      writeFileSync(temporaryPath, content, { encoding: "utf8", mode: statSync(path).mode });
-      if (hash(readFileSync(path, "utf8")) !== expectedHash) throw new MemoryConflictError();
-      renameSync(temporaryPath, path);
-    } catch (error) {
-      if (existsSync(temporaryPath)) unlinkSync(temporaryPath);
-      throw error;
-    }
+    return resolveMemoryMarkdownPath(this.root, path);
   }
 }

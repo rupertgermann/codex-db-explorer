@@ -40,20 +40,3 @@ export async function PUT(request: Request) {
     );
   }
 }
-
-export async function DELETE(request: Request) {
-  try {
-    const body = (await request.json()) as { path?: unknown; expectedHash?: unknown };
-    if (typeof body.path !== "string" || typeof body.expectedHash !== "string") {
-      throw new Error("path and expectedHash are required.");
-    }
-    new MemoryRepository().delete({ path: body.path, expectedHash: body.expectedHash });
-    return NextResponse.json({ path: body.path }, { headers: { "Cache-Control": "no-store" } });
-  } catch (error) {
-    const status = error instanceof MemoryConflictError ? 409 : error instanceof MemoryPathError ? 404 : 400;
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Could not delete memory file." },
-      { status },
-    );
-  }
-}

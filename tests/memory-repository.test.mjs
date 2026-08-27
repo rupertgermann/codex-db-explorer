@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
@@ -74,6 +74,19 @@ test("reads a document and searches all Markdown with line-level matches", () =>
   assert.deepEqual(repository.search("   "), []);
 });
 
+test("keeps document paths relative to a logical root that resolves through a symlink", () => {
+  const parent = memoryRoot();
+  const actualRoot = join(parent, "actual");
+  const linkedRoot = join(parent, "linked");
+  mkdirSync(actualRoot);
+  symlinkSync(actualRoot, linkedRoot, "dir");
+  writeFileSync(join(actualRoot, "memory_summary.md"), "# Summary\n");
+
+  const document = new MemoryRepository(linkedRoot).read("memory_summary.md");
+
+  assert.equal(document.path, "memory_summary.md");
+});
+
 test("saves atomically only when the opened revision is still current", () => {
   const root = memoryRoot();
   const path = join(root, "MEMORY.md");
@@ -93,29 +106,4 @@ test("saves atomically only when the opened revision is still current", () => {
   );
   assert.throws(() => repository.read("../outside.md"), { name: "MemoryPathError" });
   assert.throws(() => repository.read("not-markdown.txt"), { name: "MemoryPathError" });
-});
-
-test("deletes only the requested Markdown file at the opened revision", () => {
-  const root = memoryRoot();
-  const path = join(root, "note.md");
-  writeFileSync(path, "# Note\n\nDelete me.\n");
-  writeFileSync(join(root, "keep.md"), "# Keep\n");
-  const repository = new MemoryRepository(root);
-  const opened = repository.read("note.md");
-
-  repository.delete({ path: "note.md", expectedHash: opened.hash });
-
-  assert.deepEqual(readdirSync(root), ["keep.md"]);
-  assert.throws(() => repository.read("note.md"), { name: "MemoryPathError" });
-
-  writeFileSync(path, "# Note\n\nChanged elsewhere.\n");
-  assert.throws(
-    () => repository.delete({ path: "note.md", expectedHash: opened.hash }),
-    { name: "MemoryConflictError" },
-  );
-  assert.equal(readFileSync(path, "utf8"), "# Note\n\nChanged elsewhere.\n");
-  assert.throws(
-    () => repository.delete({ path: "../outside.md", expectedHash: opened.hash }),
-    { name: "MemoryPathError" },
-  );
 });
