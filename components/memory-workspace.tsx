@@ -16,6 +16,7 @@ import {
   Save,
   Search,
   Text,
+  Trash2,
   X,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -23,8 +24,11 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { MemoryForgetDialog, type ForgetRecheck } from "@/components/memory-forget-dialog";
+import { MemoryOrphanDialog } from "@/components/memory-orphan-dialog";
 import { cn, formatBytes, formatDate, formatNumber } from "@/lib/utils";
 import type { ForgetPlan, ForgetResult } from "@/lib/memory-forget";
+import type { OrphanPlan, OrphanResult } from "@/lib/memory-orphan";
+import { isAggregateMemoryPath } from "@/lib/memory-policy";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -118,6 +122,11 @@ export function MemoryWorkspace() {
   const [forgetLoading, setForgetLoading] = useState(false);
   const [forgetError, setForgetError] = useState<string | null>(null);
   const [confirmedDurableIds, setConfirmedDurableIds] = useState<string[]>([]);
+  const [orphanOpen, setOrphanOpen] = useState(false);
+  const [orphanPlan, setOrphanPlan] = useState<OrphanPlan | null>(null);
+  const [orphanResult, setOrphanResult] = useState<OrphanResult | null>(null);
+  const [orphanLoading, setOrphanLoading] = useState(false);
+  const [orphanError, setOrphanError] = useState<string | null>(null);
   const [message, setMessage] = useState<{ kind: "success" | "error"; text: string } | null>(null);
 
   const dirty = document !== null && editedContent !== document.content;
@@ -247,6 +256,44 @@ export function MemoryWorkspace() {
     } finally { setForgetLoading(false); }
   }
 
+  async function inspectOrphan() {
+    if (!document || isAggregateMemoryPath(document.path) || dirty) return;
+    setOrphanOpen(true); setOrphanLoading(true); setOrphanError(null); setOrphanPlan(null); setOrphanResult(null);
+    try {
+      setOrphanPlan(await memoryRequest<OrphanPlan>("/api/memory/orphan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "inspect", path: document.path }),
+      }));
+    } catch (error) {
+      setOrphanError(error instanceof Error ? error.message : "Could not inspect this orphan candidate.");
+    } finally { setOrphanLoading(false); }
+  }
+
+  async function applyOrphan() {
+    if (!orphanPlan?.eligible) return;
+    setOrphanLoading(true); setOrphanError(null);
+    try {
+      const result = await memoryRequest<OrphanResult>("/api/memory/orphan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "apply", plan: orphanPlan, confirmation: { path: orphanPlan.path, expectedHash: orphanPlan.expectedHash } }),
+      });
+      setOrphanResult(result);
+      const next = await memorySnapshot(false);
+      setCatalog(next.catalog);
+      const fallback = next.catalog.files.find(({ path }) => path === "MEMORY.md") ?? next.catalog.files[0];
+      if (fallback) {
+        const refreshed = await memoryRequest<MemoryDocument>(`/api/memory/document?path=${encodeURIComponent(fallback.path)}`);
+        setDocument(refreshed); setEditedContent(refreshed.content); setView("edit");
+      } else {
+        setDocument(null); setEditedContent("");
+      }
+    } catch (error) {
+      setOrphanError(error instanceof Error ? error.message : "Could not delete this orphan file.");
+    } finally { setOrphanLoading(false); }
+  }
+
   const visibleFiles = useMemo(() => catalog?.files.filter((file) => directory === "All" || file.directory === directory) ?? [], [catalog, directory]);
   const directoryCounts = useMemo(() => catalog?.files.reduce<Record<string, number>>((counts, file) => ({ ...counts, [file.directory]: (counts[file.directory] ?? 0) + 1 }), {}) ?? {}, [catalog]);
   const maxTerm = catalog?.topTerms[0]?.count ?? 1;
@@ -285,6 +332,7 @@ export function MemoryWorkspace() {
         <div className="space-y-5 xl:col-span-2 xl:grid xl:grid-cols-2 xl:gap-5 xl:space-y-0 2xl:col-span-1 2xl:block 2xl:space-y-5">
           <Card><CardHeader><CardTitle className="flex items-center gap-2 text-sm"><Brain className="size-4 text-cyan-600" />Frequent terms</CardTitle><CardDescription>Most frequent non-stopwords across the corpus</CardDescription></CardHeader><CardContent className="space-y-2.5">{catalog.topTerms.slice(0, 12).map((item) => <div key={item.term}><div className="mb-1 flex items-center justify-between text-[11px]"><span className="truncate">{item.term}</span><span className="tabular-nums text-muted-foreground">{formatNumber(item.count)}</span></div><div className="h-1 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-cyan-500" style={{ width: `${Math.max(4, item.count / maxTerm * 100)}%` }} /></div></div>)}</CardContent></Card>
           <Card><CardHeader><CardTitle className="flex items-center gap-2 text-sm"><Folder className="size-4 text-indigo-500" />Corpus map</CardTitle><CardDescription>Markdown files by directory</CardDescription></CardHeader><CardContent className="space-y-2">{Object.entries(directoryCounts).sort(([, left], [, right]) => right - left).map(([name, count]) => <button key={name} onClick={() => { setQuery(""); setDirectory(name); }} className="flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-xs hover:bg-muted"><span className="truncate font-mono text-[10px]">{name}</span><Badge variant="secondary">{count}</Badge></button>)}</CardContent></Card>
+          <Card><CardHeader><CardTitle className="flex items-center gap-2 text-sm"><Trash2 className="size-4 text-red-500" />Advanced cleanup</CardTitle><CardDescription>Inspect dependencies before removing one whole non-core file</CardDescription></CardHeader><CardContent>{document && !isAggregateMemoryPath(document.path) ? <div className="space-y-2"><p className="font-mono text-[10px] text-muted-foreground">{document.path}</p><Button variant="outline" size="sm" onClick={() => { void inspectOrphan(); }} disabled={dirty}><Trash2 className="size-3.5" />Delete orphaned file…</Button>{dirty && <p className="text-[10px] text-amber-700">Save or discard editor changes before inspection.</p>}</div> : <p className="text-xs text-muted-foreground">Aggregate Memory files are never eligible. Use Forget for individual Memories.</p>}</CardContent></Card>
         </div>
       </div>
 
@@ -301,6 +349,16 @@ export function MemoryWorkspace() {
         onRefresh={() => { if (forgetPlan) void previewForget(forgetPlan.selection.summaryLine, confirmedDurableIds); }}
         onApply={() => { void applyForget(); }}
         onRecheck={() => { void recheckForget(); }}
+      />
+      <MemoryOrphanDialog
+        key={orphanPlan?.expectedHash ?? "empty-orphan-plan"}
+        open={orphanOpen}
+        loading={orphanLoading}
+        error={orphanError}
+        plan={orphanPlan}
+        result={orphanResult}
+        onOpenChange={setOrphanOpen}
+        onApply={() => { void applyOrphan(); }}
       />
     </div>
   );
