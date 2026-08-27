@@ -8,6 +8,7 @@ test("previews, applies, and manually rechecks one visible Summary Memory", asyn
   await page.goto("/");
   await page.getByRole("button", { name: "Markdown memory" }).click();
   await page.getByRole("button", { name: /memory_summary\.md/ }).click();
+  await expect(page.getByRole("button", { name: "Delete", exact: true })).toHaveCount(0);
   await page.getByRole("button", { name: "Preview" }).click();
 
   await page.getByRole("button", { name: "Forget…" }).first().click();

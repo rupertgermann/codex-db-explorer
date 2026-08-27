@@ -236,13 +236,6 @@ export class MemoryRepository {
     return this.read(input.path);
   }
 
-  delete(input: { path: string; expectedHash: string }): void {
-    const absolutePath = this.resolveMarkdownPath(input.path);
-    const currentContent = readFileSync(absolutePath, "utf8");
-    if (memoryHash(currentContent) !== input.expectedHash) throw new MemoryConflictError();
-    unlinkSync(absolutePath);
-  }
-
   private resolveMarkdownPath(path: string) {
     return resolveMemoryMarkdownPath(this.root, path);
   }

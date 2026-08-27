@@ -107,28 +107,3 @@ test("saves atomically only when the opened revision is still current", () => {
   assert.throws(() => repository.read("../outside.md"), { name: "MemoryPathError" });
   assert.throws(() => repository.read("not-markdown.txt"), { name: "MemoryPathError" });
 });
-
-test("deletes only the requested Markdown file at the opened revision", () => {
-  const root = memoryRoot();
-  const path = join(root, "note.md");
-  writeFileSync(path, "# Note\n\nDelete me.\n");
-  writeFileSync(join(root, "keep.md"), "# Keep\n");
-  const repository = new MemoryRepository(root);
-  const opened = repository.read("note.md");
-
-  repository.delete({ path: "note.md", expectedHash: opened.hash });
-
-  assert.deepEqual(readdirSync(root), ["keep.md"]);
-  assert.throws(() => repository.read("note.md"), { name: "MemoryPathError" });
-
-  writeFileSync(path, "# Note\n\nChanged elsewhere.\n");
-  assert.throws(
-    () => repository.delete({ path: "note.md", expectedHash: opened.hash }),
-    { name: "MemoryConflictError" },
-  );
-  assert.equal(readFileSync(path, "utf8"), "# Note\n\nChanged elsewhere.\n");
-  assert.throws(
-    () => repository.delete({ path: "../outside.md", expectedHash: opened.hash }),
-    { name: "MemoryPathError" },
-  );
-});

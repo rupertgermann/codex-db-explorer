@@ -16,13 +16,11 @@ import {
   Save,
   Search,
   Text,
-  Trash2,
   X,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { MemoryForgetDialog, type ForgetRecheck } from "@/components/memory-forget-dialog";
 import { cn, formatBytes, formatDate, formatNumber } from "@/lib/utils";
@@ -113,8 +111,6 @@ export function MemoryWorkspace() {
   const [loading, setLoading] = useState(true);
   const [documentLoading, setDocumentLoading] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [deleting, setDeleting] = useState(false);
-  const [deleteOpen, setDeleteOpen] = useState(false);
   const [forgetOpen, setForgetOpen] = useState(false);
   const [forgetPlan, setForgetPlan] = useState<ForgetPlan | null>(null);
   const [forgetResult, setForgetResult] = useState<ForgetResult | null>(null);
@@ -202,33 +198,6 @@ export function MemoryWorkspace() {
     } finally { setSaving(false); }
   }
 
-  async function deleteDocument() {
-    if (!document) return;
-    setDeleting(true); setMessage(null);
-    const deletedPath = document.path;
-    try {
-      await memoryRequest<{ path: string }>("/api/memory/document", {
-        method: "DELETE",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path: deletedPath, expectedHash: document.hash }),
-      });
-      const nextCatalog = await memoryRequest<MemoryCatalog>("/api/memory");
-      const nextSummary = nextCatalog.files.find((file) => file.path === "MEMORY.md") ?? nextCatalog.files[0];
-      const nextDocument = nextSummary
-        ? await memoryRequest<MemoryDocument>(`/api/memory/document?path=${encodeURIComponent(nextSummary.path)}`)
-        : null;
-      setCatalog(nextCatalog);
-      setSearchResults((results) => results?.filter((result) => result.path !== deletedPath) ?? null);
-      if (directory !== "All" && !nextCatalog.directories.includes(directory)) setDirectory("All");
-      setDocument(nextDocument);
-      setEditedContent(nextDocument?.content ?? "");
-      setDeleteOpen(false);
-      setMessage({ kind: "success", text: `Deleted ${deletedPath}` });
-    } catch (error) {
-      setMessage({ kind: "error", text: error instanceof Error ? error.message : "Could not delete memory file." });
-    } finally { setDeleting(false); }
-  }
-
   async function previewForget(summaryLine: number, durableIds: string[] = []) {
     if (!document || document.path !== "memory_summary.md" || dirty) return;
     setForgetOpen(true); setForgetLoading(true); setForgetError(null); setForgetResult(null); setForgetRecheck(null);
@@ -310,7 +279,7 @@ export function MemoryWorkspace() {
         </Card>
 
         <Card className="min-w-0 overflow-hidden">
-          {document ? <Fragment><div className="flex flex-col gap-3 border-b px-4 py-3 sm:flex-row sm:items-center sm:justify-between"><div className="min-w-0"><div className="flex items-center gap-2"><p className="truncate text-sm font-semibold">{document.title}</p>{dirty && <Badge variant="warning">unsaved</Badge>}</div><p className="truncate font-mono text-[10px] text-muted-foreground">{document.path}</p></div><div className="flex items-center gap-2"><div className="flex rounded-lg border bg-muted/40 p-0.5"><button onClick={() => setView("edit")} className={cn("flex h-7 items-center gap-1 rounded-md px-2 text-[11px]", view === "edit" ? "bg-white font-medium shadow-sm" : "text-muted-foreground")}><Pencil className="size-3" />Edit</button><button onClick={() => setView("preview")} className={cn("flex h-7 items-center gap-1 rounded-md px-2 text-[11px]", view === "preview" ? "bg-white font-medium shadow-sm" : "text-muted-foreground")}><Eye className="size-3" />Preview</button></div><Button variant="outline" size="sm" onClick={() => setDeleteOpen(true)} disabled={deleting || documentLoading} className="border-red-200 text-red-700 hover:bg-red-50 hover:text-red-800"><Trash2 className="size-3.5" /><span className="hidden sm:inline">Delete</span></Button><Button size="sm" onClick={save} disabled={!dirty || saving}>{saving ? <Loader2 className="size-3.5 animate-spin" /> : <Save className="size-3.5" />}Save</Button></div></div>{documentLoading ? <div className="flex min-h-[600px] items-center justify-center gap-2 text-sm text-muted-foreground"><Loader2 className="size-4 animate-spin" />Opening file…</div> : view === "edit" ? <textarea value={editedContent} onChange={(event) => setEditedContent(event.target.value)} spellCheck={false} className="scrollbar-thin min-h-[680px] w-full resize-y bg-[#151c27] p-5 font-mono text-[12px] leading-6 text-slate-200 outline-none" /> : <div className="scrollbar-thin min-h-[680px] max-h-[760px] overflow-y-auto bg-white"><MarkdownPreview content={editedContent} onForgetLine={document.path === "memory_summary.md" && !dirty ? previewForget : undefined} /></div>}<div className="flex flex-wrap items-center justify-between gap-2 border-t px-4 py-2 text-[10px] text-muted-foreground"><span>{formatNumber(editedContent.length)} characters · {formatNumber(editedContent.match(/[\p{L}\p{N}][\p{L}\p{N}_'-]*/gu)?.length ?? 0)} words</span><span>Loaded {formatDate(document.modifiedAt)} · rev {document.hash.slice(0, 8)}</span></div></Fragment> : <div className="flex min-h-[680px] items-center justify-center text-sm text-muted-foreground">Select a memory file.</div>}
+          {document ? <Fragment><div className="flex flex-col gap-3 border-b px-4 py-3 sm:flex-row sm:items-center sm:justify-between"><div className="min-w-0"><div className="flex items-center gap-2"><p className="truncate text-sm font-semibold">{document.title}</p>{dirty && <Badge variant="warning">unsaved</Badge>}</div><p className="truncate font-mono text-[10px] text-muted-foreground">{document.path}</p></div><div className="flex items-center gap-2"><div className="flex rounded-lg border bg-muted/40 p-0.5"><button onClick={() => setView("edit")} className={cn("flex h-7 items-center gap-1 rounded-md px-2 text-[11px]", view === "edit" ? "bg-white font-medium shadow-sm" : "text-muted-foreground")}><Pencil className="size-3" />Edit</button><button onClick={() => setView("preview")} className={cn("flex h-7 items-center gap-1 rounded-md px-2 text-[11px]", view === "preview" ? "bg-white font-medium shadow-sm" : "text-muted-foreground")}><Eye className="size-3" />Preview</button></div><Button size="sm" onClick={save} disabled={!dirty || saving}>{saving ? <Loader2 className="size-3.5 animate-spin" /> : <Save className="size-3.5" />}Save</Button></div></div>{documentLoading ? <div className="flex min-h-[600px] items-center justify-center gap-2 text-sm text-muted-foreground"><Loader2 className="size-4 animate-spin" />Opening file…</div> : view === "edit" ? <textarea value={editedContent} onChange={(event) => setEditedContent(event.target.value)} spellCheck={false} className="scrollbar-thin min-h-[680px] w-full resize-y bg-[#151c27] p-5 font-mono text-[12px] leading-6 text-slate-200 outline-none" /> : <div className="scrollbar-thin min-h-[680px] max-h-[760px] overflow-y-auto bg-white"><MarkdownPreview content={editedContent} onForgetLine={document.path === "memory_summary.md" && !dirty ? previewForget : undefined} /></div>}<div className="flex flex-wrap items-center justify-between gap-2 border-t px-4 py-2 text-[10px] text-muted-foreground"><span>{formatNumber(editedContent.length)} characters · {formatNumber(editedContent.match(/[\p{L}\p{N}][\p{L}\p{N}_'-]*/gu)?.length ?? 0)} words</span><span>Loaded {formatDate(document.modifiedAt)} · rev {document.hash.slice(0, 8)}</span></div></Fragment> : <div className="flex min-h-[680px] items-center justify-center text-sm text-muted-foreground">Select a memory file.</div>}
         </Card>
 
         <div className="space-y-5 xl:col-span-2 xl:grid xl:grid-cols-2 xl:gap-5 xl:space-y-0 2xl:col-span-1 2xl:block 2xl:space-y-5">
@@ -318,21 +287,6 @@ export function MemoryWorkspace() {
           <Card><CardHeader><CardTitle className="flex items-center gap-2 text-sm"><Folder className="size-4 text-indigo-500" />Corpus map</CardTitle><CardDescription>Markdown files by directory</CardDescription></CardHeader><CardContent className="space-y-2">{Object.entries(directoryCounts).sort(([, left], [, right]) => right - left).map(([name, count]) => <button key={name} onClick={() => { setQuery(""); setDirectory(name); }} className="flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-xs hover:bg-muted"><span className="truncate font-mono text-[10px]">{name}</span><Badge variant="secondary">{count}</Badge></button>)}</CardContent></Card>
         </div>
       </div>
-
-      <Dialog open={deleteOpen} onOpenChange={(open) => { if (!deleting) setDeleteOpen(open); }}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>Delete Markdown file?</DialogTitle>
-            <DialogDescription>This permanently deletes the selected file from Codex memory. This action cannot be undone.</DialogDescription>
-          </DialogHeader>
-          <div className="rounded-lg border border-red-100 bg-red-50 p-3 font-mono text-xs text-red-800">{document?.path}</div>
-          {dirty && <p className="mt-3 flex items-start gap-2 text-xs text-amber-700"><AlertTriangle className="mt-0.5 size-3.5 shrink-0" />Unsaved editor changes will also be discarded.</p>}
-          <div className="mt-6 flex justify-end gap-2">
-            <Button variant="outline" onClick={() => setDeleteOpen(false)} disabled={deleting}>Cancel</Button>
-            <Button variant="destructive" onClick={deleteDocument} disabled={deleting}>{deleting ? <Loader2 className="size-4 animate-spin" /> : <Trash2 className="size-4" />}Delete file</Button>
-          </div>
-        </DialogContent>
-      </Dialog>
 
       <MemoryForgetDialog
         open={forgetOpen}
