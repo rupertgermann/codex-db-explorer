@@ -16,6 +16,8 @@ export default defineConfig({
     env: {
       CODEX_HOME: "/tmp/codex-explorer-e2e-home",
       CODEX_MEMORY_DIRECTORY: "/tmp/codex-explorer-e2e-memory",
+      CODEX_SESSIONS_DIRECTORY: "/tmp/codex-explorer-e2e-sessions",
+      CODEX_DB_DIRECTORY: "/tmp/codex-explorer-e2e-databases",
     },
     url: "http://127.0.0.1:3317",
     reuseExistingServer: false,
